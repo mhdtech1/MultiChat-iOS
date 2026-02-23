@@ -1,0 +1,27 @@
+{
+  "name": "@multichat/ios",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "scripts": {
+    "start": "pnpm --filter @multichat/chat-core build && expo start",
+    "android": "pnpm --filter @multichat/chat-core build && expo start --android",
+    "ios": "pnpm --filter @multichat/chat-core build && expo start --ios",
+    "web": "pnpm --filter @multichat/chat-core build && expo start --web"
+  },
+  "dependencies": {
+    "@multichat/chat-core": "workspace:*",
+    "expo": "~54.0.33",
+    "expo-auth-session": "~7.0.8",
+    "expo-crypto": "~15.0.7",
+    "expo-status-bar": "~3.0.9",
+    "expo-web-browser": "~15.0.8",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0"
+  },
+  "devDependencies": {
+    "@types/react": "~19.1.0",
+    "typescript": "~5.9.2"
+  },
+  "private": true
+}

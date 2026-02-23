@@ -1,0 +1,7 @@
+node_modules/
+.pnpm-store/
+apps/ios/.expo/
+apps/ios/.expo-shared/
+apps/ios/dist/
+packages/chat-core/dist/
+.DS_Store

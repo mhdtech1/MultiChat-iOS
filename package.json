@@ -1,0 +1,14 @@
+{
+  "name": "multichat-ios-workspace",
+  "private": true,
+  "packageManager": "pnpm@9.12.3",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "ios": "pnpm --filter @multichat/ios ios",
+    "start": "pnpm --filter @multichat/ios start",
+    "build:chat-core": "pnpm --filter @multichat/chat-core build"
+  }
+}
