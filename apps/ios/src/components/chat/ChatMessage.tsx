@@ -16,7 +16,14 @@ import type {
   RenderBadge,
 } from '../../types';
 import { PLATFORM_COLORS } from '../../constants/config';
-import { formatTimestamp, segmentMessageWithEmotes } from '../../utils/helpers';
+import {
+  compactBadgeLabel,
+  expandBadgeLookupKeys,
+  formatTimestamp,
+  getMessageAuthor,
+  getMessageAuthorColor,
+  segmentMessageWithEmotes,
+} from '../../utils/helpers';
 
 interface ChatMessageProps {
   message: EnhancedChatMessage;
@@ -37,6 +44,8 @@ export const ChatMessage = memo(function ChatMessage({
   onMessageLongPress,
 }: ChatMessageProps) {
   const platform = message.platform as PlatformId;
+  const author = useMemo(() => getMessageAuthor(message), [message]);
+  const authorColor = useMemo(() => getMessageAuthorColor(message), [message]);
   const segments = useMemo(
     () => segmentMessageWithEmotes(message.message, emoteMap),
     [message.message, emoteMap]
@@ -45,14 +54,37 @@ export const ChatMessage = memo(function ChatMessage({
   // Parse badges
   const badges: RenderBadge[] = useMemo(() => {
     if (!message.badges) return [];
-    return message.badges.map((badge) => {
-      const badgeKey = typeof badge === 'string' ? badge : badge.id || '';
-      return {
-        key: badgeKey,
-        label: typeof badge === 'object' ? badge.label : badgeKey,
-        imageUri: badgeMap[badgeKey] || (typeof badge === 'object' ? badge.imageUrl : undefined),
-      };
-    }).filter(b => b.key);
+    const resolved: RenderBadge[] = [];
+    const seenKeys = new Set<string>();
+    const seenImageUris = new Set<string>();
+
+    for (const rawBadge of message.badges as unknown[]) {
+      const badgeKey =
+        typeof rawBadge === 'string'
+          ? rawBadge
+          : rawBadge && typeof rawBadge === 'object' && 'id' in rawBadge && typeof (rawBadge as { id?: unknown }).id === 'string'
+            ? (rawBadge as { id: string }).id
+            : '';
+      if (!badgeKey) continue;
+
+      const lookupKeys = expandBadgeLookupKeys(badgeKey);
+      const imageUri = lookupKeys.map((key) => badgeMap[key]).find((value) => typeof value === 'string' && value.length > 0);
+      const resolvedKey = lookupKeys[0] || badgeKey;
+      if (seenKeys.has(resolvedKey)) continue;
+      seenKeys.add(resolvedKey);
+      if (imageUri && seenImageUris.has(imageUri)) continue;
+
+      if (imageUri) {
+        seenImageUris.add(imageUri);
+      }
+      resolved.push({
+        key: resolvedKey,
+        label: badgeKey,
+        imageUri,
+      });
+    }
+
+    return resolved;
   }, [message.badges, badgeMap]);
 
   // Check for special message types (P1 Recommendation #9)
@@ -71,12 +103,12 @@ export const ChatMessage = memo(function ChatMessage({
 
   // P2 Recommendation #15: Accessibility label
   const accessibilityLabel = useMemo(() => {
-    let label = `Message from ${message.author}`;
+    let label = `Message from ${author}`;
     if (message.twitchMeta?.isRaid) label += ', raid notification';
     if (message.youtubeMeta?.isSuperChat) label += `, super chat ${message.youtubeMeta.superChatAmount}`;
     label += `: ${message.message}`;
     return label;
-  }, [message]);
+  }, [author, message]);
 
   return (
     <View>
@@ -121,23 +153,27 @@ export const ChatMessage = memo(function ChatMessage({
             {badges.length > 0 && (
               <View style={styles.badgesContainer}>
                 {badges.slice(0, 5).map((badge, index) => (
-                  <BadgeImage key={`${badge.key}-${index}`} badge={badge} />
+                  <BadgeImage
+                    key={`${badge.key}-${index}`}
+                    badge={badge}
+                    allowTextFallback={platform !== 'twitch'}
+                  />
                 ))}
               </View>
             )}
 
             {/* Author name */}
             <Pressable
-              onPress={() => onAuthorPress?.(message.author)}
+              onPress={() => onAuthorPress?.(author)}
               hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
             >
               <Text
                 style={[
                   styles.authorName,
-                  { color: message.authorColor || colors.text.primary },
+                  { color: authorColor || colors.text.primary },
                 ]}
               >
-                {message.author}
+                {author}
               </Text>
             </Pressable>
 
@@ -160,7 +196,13 @@ export const ChatMessage = memo(function ChatMessage({
 });
 
 // Badge component
-const BadgeImage = memo(function BadgeImage({ badge }: { badge: RenderBadge }) {
+const BadgeImage = memo(function BadgeImage({
+  badge,
+  allowTextFallback,
+}: {
+  badge: RenderBadge;
+  allowTextFallback: boolean;
+}) {
   if (badge.imageUri) {
     return (
       <Image
@@ -170,14 +212,14 @@ const BadgeImage = memo(function BadgeImage({ badge }: { badge: RenderBadge }) {
       />
     );
   }
-  if (badge.label) {
-    return (
-      <View style={styles.badgeText}>
-        <Text style={styles.badgeTextLabel}>{badge.label.slice(0, 2)}</Text>
-      </View>
-    );
-  }
-  return null;
+  if (!allowTextFallback) return null;
+  const fallback = compactBadgeLabel(badge.label || badge.key);
+  if (!fallback) return null;
+  return (
+    <View style={styles.badgeText} accessibilityLabel={badge.label || 'Badge'}>
+      <Text style={styles.badgeTextLabel}>{fallback}</Text>
+    </View>
+  );
 });
 
 // Message segment component (text or emote)

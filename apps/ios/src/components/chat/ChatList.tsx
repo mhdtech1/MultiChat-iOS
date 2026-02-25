@@ -18,7 +18,7 @@ import type { EnhancedChatMessage, MessageFilter } from '../../types';
 import { ChatMessage } from './ChatMessage';
 import { ChatListSkeleton } from '../common/LoadingStates';
 import { NoChatEmptyState, NoFilteredMessagesEmptyState } from '../common/EmptyStates';
-import { shouldShowTimestamp } from '../../utils/helpers';
+import { getMessageAuthor, shouldShowTimestamp } from '../../utils/helpers';
 
 interface ChatListProps {
   messages: EnhancedChatMessage[];
@@ -45,7 +45,8 @@ export const ChatList = memo(function ChatList({
   onMessageLongPress,
 }: ChatListProps) {
   const flatListRef = useRef<FlatList>(null);
-  const [isAtBottom, setIsAtBottom] = useState(true);
+  const userDraggingRef = useRef(false);
+  const [followLatest, setFollowLatest] = useState(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const lastMessageCount = useRef(messages.length);
 
@@ -60,7 +61,8 @@ export const ChatList = memo(function ChatList({
       }
 
       // User filter
-      if (filter.users.length > 0 && !filter.users.includes(msg.author.toLowerCase())) {
+      const author = getMessageAuthor(msg).toLowerCase();
+      if (filter.users.length > 0 && !filter.users.includes(author)) {
         return false;
       }
 
@@ -82,29 +84,66 @@ export const ChatList = memo(function ChatList({
     });
   }, [messages, filter]);
 
-  // Auto-scroll to bottom when new messages arrive (if user is at bottom)
+  const isNearBottom = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
+    const distanceFromBottom = contentSize.height - (layoutMeasurement.height + contentOffset.y);
+    return distanceFromBottom <= 72;
+  }, []);
+
+  // Auto-scroll to bottom when new messages arrive (unless user paused by scrolling)
   useEffect(() => {
-    if (isAtBottom && messages.length > lastMessageCount.current) {
-      setTimeout(() => {
+    if (followLatest && messages.length > lastMessageCount.current) {
+      requestAnimationFrame(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
+      });
     }
     lastMessageCount.current = messages.length;
-  }, [messages.length, isAtBottom]);
+  }, [messages.length, followLatest]);
 
-  // Handle scroll events
+  // Handle scroll events; only pause auto-follow when user manually drags away from bottom.
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { layoutMeasurement, contentOffset, contentSize } = event.nativeEvent;
-    const paddingToBottom = 50;
-    const atBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - paddingToBottom;
-    setIsAtBottom(atBottom);
-    setShowScrollToBottom(!atBottom && contentOffset.y > 200);
+    if (isNearBottom(event)) {
+      setFollowLatest(true);
+      setShowScrollToBottom(false);
+      return;
+    }
+    if (userDraggingRef.current) {
+      setFollowLatest(false);
+      setShowScrollToBottom(true);
+    }
+  }, [isNearBottom]);
+
+  const handleScrollBeginDrag = useCallback(() => {
+    userDraggingRef.current = true;
   }, []);
+
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    userDraggingRef.current = false;
+    if (isNearBottom(event)) {
+      setFollowLatest(true);
+      setShowScrollToBottom(false);
+    }
+  }, [isNearBottom]);
+
+  const handleMomentumScrollEnd = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (isNearBottom(event)) {
+      setFollowLatest(true);
+      setShowScrollToBottom(false);
+    }
+  }, [isNearBottom]);
 
   // Scroll to bottom button handler
   const scrollToBottom = useCallback(() => {
+    setFollowLatest(true);
+    setShowScrollToBottom(false);
     flatListRef.current?.scrollToEnd({ animated: true });
   }, []);
+
+  const handleContentSizeChange = useCallback(() => {
+    if (followLatest) {
+      flatListRef.current?.scrollToEnd({ animated: false });
+    }
+  }, [followLatest]);
 
   // Render item with timestamp logic - P1 Recommendation #6
   const renderItem = useCallback(
@@ -136,16 +175,6 @@ export const ChatList = memo(function ChatList({
     []
   );
 
-  // Optimized item layout for better performance
-  const getItemLayout = useCallback(
-    (_: any, index: number) => ({
-      length: 60, // Approximate item height
-      offset: 60 * index,
-      index,
-    }),
-    []
-  );
-
   // Loading state
   if (isLoading) {
     return <ChatListSkeleton count={10} />;
@@ -168,6 +197,10 @@ export const ChatList = memo(function ChatList({
         renderItem={renderItem}
         keyExtractor={keyExtractor}
         onScroll={handleScroll}
+        onScrollBeginDrag={handleScrollBeginDrag}
+        onScrollEndDrag={handleScrollEndDrag}
+        onMomentumScrollEnd={handleMomentumScrollEnd}
+        onContentSizeChange={handleContentSizeChange}
         scrollEventThrottle={16}
         // P2 Recommendation #14: Performance optimizations
         removeClippedSubviews={true}
@@ -175,12 +208,6 @@ export const ChatList = memo(function ChatList({
         windowSize={10}
         initialNumToRender={20}
         updateCellsBatchingPeriod={50}
-        // Disable estimated item size warning
-        getItemLayout={getItemLayout}
-        // Maintain scroll position
-        maintainVisibleContentPosition={{
-          minIndexForVisible: 0,
-        }}
         // Styling
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
@@ -190,7 +217,7 @@ export const ChatList = memo(function ChatList({
       {showScrollToBottom && (
         <Pressable style={styles.scrollToBottomButton} onPress={scrollToBottom}>
           <Text style={styles.scrollToBottomIcon}>↓</Text>
-          <Text style={styles.scrollToBottomText}>New messages</Text>
+          <Text style={styles.scrollToBottomText}>Go to latest message</Text>
         </Pressable>
       )}
     </View>

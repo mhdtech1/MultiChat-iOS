@@ -5,6 +5,7 @@
 import { useState, useCallback, useMemo } from 'react';
 import type { EnhancedChatMessage, SearchQuery, SearchResult, PlatformId } from '../types';
 import { SEARCH_DEBOUNCE_MS } from '../constants/config';
+import { getMessageAuthor } from '../utils/helpers';
 
 export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
   const [query, setQuery] = useState<SearchQuery>({ text: '' });
@@ -29,7 +30,8 @@ export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
         }
 
         // Filter by user if specified
-        if (searchQuery.users?.length && !searchQuery.users.includes(message.author.toLowerCase())) {
+        const author = getMessageAuthor(message).toLowerCase();
+        if (searchQuery.users?.length && !searchQuery.users.includes(author)) {
           continue;
         }
 
@@ -43,7 +45,7 @@ export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
 
         // Text search
         const messageText = message.message.toLowerCase();
-        const authorText = message.author.toLowerCase();
+        const authorText = author;
 
         if (messageText.includes(searchText) || authorText.includes(searchText)) {
           // Find the matched text for highlighting

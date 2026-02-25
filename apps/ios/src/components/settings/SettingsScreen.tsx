@@ -24,8 +24,12 @@ import { PLATFORM_LOGOS, PLATFORM_NAMES, PLATFORM_COLORS } from '../../constants
 interface SettingsScreenProps {
   // Account state
   twitchUsername: string;
+  twitchToken: string;
   kickUsername: string;
+  kickToken: string;
   youtubeUsername: string;
+  youtubeAccessToken: string;
+  youtubeRefreshToken: string;
   // Notification preferences
   notificationPreferences: NotificationPreferences;
   onNotificationPreferencesChange: (prefs: NotificationPreferences) => void;
@@ -43,8 +47,12 @@ interface SettingsScreenProps {
 
 export function SettingsScreen({
   twitchUsername,
+  twitchToken,
   kickUsername,
+  kickToken,
   youtubeUsername,
+  youtubeAccessToken,
+  youtubeRefreshToken,
   notificationPreferences,
   onNotificationPreferencesChange,
   onConnectTwitch,
@@ -75,18 +83,21 @@ export function SettingsScreen({
       <View style={styles.section}>
         <AccountRow
           platform="twitch"
+          connected={Boolean(twitchToken.trim())}
           username={twitchUsername}
           onConnect={onConnectTwitch}
           onDisconnect={onDisconnectTwitch}
         />
         <AccountRow
           platform="kick"
+          connected={Boolean(kickToken.trim())}
           username={kickUsername}
           onConnect={onConnectKick}
           onDisconnect={onDisconnectKick}
         />
         <AccountRow
           platform="youtube"
+          connected={Boolean(youtubeAccessToken.trim() || youtubeRefreshToken.trim())}
           username={youtubeUsername}
           onConnect={onConnectYouTube}
           onDisconnect={onDisconnectYouTube}
@@ -236,16 +247,19 @@ function SectionHeader({ title, icon }: { title: string; icon: string }) {
 // Account Row Component
 function AccountRow({
   platform,
+  connected,
   username,
   onConnect,
   onDisconnect,
 }: {
   platform: PlatformId;
+  connected: boolean;
   username: string;
   onConnect: () => void;
   onDisconnect: () => void;
 }) {
-  const isConnected = Boolean(username);
+  const isConnected = connected;
+  const shownUsername = username.trim() || 'Connected account';
 
   return (
     <View style={styles.accountRow}>
@@ -253,7 +267,7 @@ function AccountRow({
       <View style={styles.accountInfo}>
         <Text style={styles.platformName}>{PLATFORM_NAMES[platform]}</Text>
         {isConnected ? (
-          <Text style={styles.username}>{username}</Text>
+          <Text style={styles.username}>{shownUsername}</Text>
         ) : (
           <Text style={styles.notConnected}>Not connected</Text>
         )}

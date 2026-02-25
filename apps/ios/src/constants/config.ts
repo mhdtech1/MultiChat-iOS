@@ -12,7 +12,8 @@ export const KICK_CLIENT_SECRET = '29f43591eb0496352c66ea36f55c5c21e3fbc5053ba22
 export const TWITCH_REDIRECT_URI = 'multichat://oauth/twitch';
 export const KICK_REDIRECT_URI = 'multichat://oauth/kick';
 export const YOUTUBE_CLIENT_ID = '1008732662207-rufcsa7rafob02h29docduk7pboim0s8.apps.googleusercontent.com';
-export const YOUTUBE_REDIRECT_URI = 'multichat://oauth/youtube';
+// Google OAuth native redirects typically require a dotted custom scheme.
+export const YOUTUBE_REDIRECT_URI = 'com.mhdtech.multichatios:/oauth/youtube';
 
 export const TWITCH_SCOPES = [
   'chat:read',
@@ -54,7 +55,7 @@ export const APP_STATE_FILENAME = 'mobile-app-state-v1.json';
 export const OBS_SAVED_CONNECTIONS_FILENAME = 'obs-saved-connections.json';
 export const OBS_PREVIEW_TARGET_INTERVAL_MS = Math.round(1000 / 24);
 export const OBS_SCENE_TILE_ROW_GAP = 10;
-export const TWITCH_GLOBAL_BADGES_URL = 'https://i.ytimg.com/vi/lRh7GVKoLO4/maxresdefault.jpg';
+export const TWITCH_GLOBAL_BADGES_URL = 'https://badges.twitch.tv/v1/badges/global/display?language=en';
 
 export const MESSAGE_BUFFER_SIZE = 500;
 export const SEARCH_DEBOUNCE_MS = 300;

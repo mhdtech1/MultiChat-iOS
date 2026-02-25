@@ -74,6 +74,8 @@ export type KickMessageMeta = {
 };
 
 export type EnhancedChatMessage = ChatMessage & {
+  author?: string;
+  authorColor?: string;
   twitchMeta?: TwitchMessageMeta;
   youtubeMeta?: YouTubeMessageMeta;
   kickMeta?: KickMessageMeta;

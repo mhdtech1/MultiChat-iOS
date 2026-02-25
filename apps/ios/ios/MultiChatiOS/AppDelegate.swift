@@ -55,6 +55,19 @@ public class AppDelegate: ExpoAppDelegate {
 class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
   // Extension point for config-plugins
 
+  private func metroFallbackURL() -> URL? {
+    // On device, localhost resolves to the phone itself; use host IP written at build time.
+    if let ipPath = Bundle.main.path(forResource: "ip", ofType: "txt"),
+       let host = try? String(contentsOfFile: ipPath, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+       !host.isEmpty {
+      return URL(
+        string: "http://\(host):8081/.expo/.virtual-metro-entry.bundle?platform=ios&dev=true&minify=false"
+      )
+    }
+    return URL(string: "http://127.0.0.1:8081/.expo/.virtual-metro-entry.bundle?platform=ios&dev=true&minify=false")
+  }
+
   override func sourceURL(for bridge: RCTBridge) -> URL? {
     // needed to return the correct URL for expo-dev-client.
     bridge.bundleURL ?? bundleURL()
@@ -62,7 +75,10 @@ class ReactNativeDelegate: ExpoReactNativeFactoryDelegate {
 
   override func bundleURL() -> URL? {
 #if DEBUG
-    return RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry")
+    if let url = RCTBundleURLProvider.sharedSettings().jsBundleURL(forBundleRoot: ".expo/.virtual-metro-entry") {
+      return url
+    }
+    return metroFallbackURL()
 #else
     return Bundle.main.url(forResource: "main", withExtension: "jsbundle")
 #endif

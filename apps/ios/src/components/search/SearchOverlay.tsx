@@ -14,10 +14,11 @@ import {
   Animated,
   Image,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, spacing, borderRadius, typography, shadows } from '../../constants/theme';
 import type { SearchResult, PlatformId } from '../../types';
 import { PLATFORM_LOGOS, PLATFORM_NAMES, PLATFORM_COLORS } from '../../constants/config';
-import { formatTimestamp } from '../../utils/helpers';
+import { formatTimestamp, getMessageAuthor, getMessageAuthorColor } from '../../utils/helpers';
 import { NoSearchResultsEmptyState } from '../common/EmptyStates';
 import { LoadingSpinner } from '../common/LoadingStates';
 
@@ -44,6 +45,7 @@ export function SearchOverlay({
   const inputRef = useRef<TextInput>(null);
   const slideAnim = useRef(new Animated.Value(-100)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (isVisible) {
@@ -96,7 +98,15 @@ export function SearchOverlay({
 
   return (
     <Animated.View style={[styles.overlay, { opacity: fadeAnim }]}>
-      <Animated.View style={[styles.container, { transform: [{ translateY: slideAnim }] }]}>
+      <Animated.View
+        style={[
+          styles.container,
+          {
+            transform: [{ translateY: slideAnim }],
+            paddingTop: Math.max(insets.top, spacing.sm),
+          },
+        ]}
+      >
         {/* Search header */}
         <View style={styles.header}>
           <View style={styles.searchInputContainer}>
@@ -176,6 +186,8 @@ interface SearchResultItemProps {
 function SearchResultItem({ result, onPress, query }: SearchResultItemProps) {
   const { message } = result;
   const platform = message.platform as PlatformId;
+  const author = getMessageAuthor(message);
+  const authorColor = getMessageAuthorColor(message);
 
   // Highlight matching text
   const highlightText = (text: string) => {
@@ -196,8 +208,8 @@ function SearchResultItem({ result, onPress, query }: SearchResultItemProps) {
     <Pressable style={styles.resultItem} onPress={onPress}>
       <View style={styles.resultHeader}>
         <View style={[styles.platformIndicator, { backgroundColor: PLATFORM_COLORS[platform] }]} />
-        <Text style={[styles.resultAuthor, { color: message.authorColor || colors.text.primary }]}>
-          {highlightText(message.author)}
+        <Text style={[styles.resultAuthor, { color: authorColor || colors.text.primary }]}>
+          {highlightText(author)}
         </Text>
         <Text style={styles.resultTime}>{formatTimestamp(message.timestamp)}</Text>
       </View>
@@ -227,6 +239,7 @@ const styles = StyleSheet.create({
   },
   searchInputContainer: {
     flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.background.card,
@@ -238,6 +251,7 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
+    minWidth: 0,
     paddingVertical: spacing.md,
     fontSize: typography.fontSize.md,
     color: colors.text.primary,
@@ -250,6 +264,7 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.md,
   },
   cancelButton: {
+    flexShrink: 0,
     marginLeft: spacing.md,
     padding: spacing.sm,
   },
