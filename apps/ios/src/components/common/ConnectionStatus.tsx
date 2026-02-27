@@ -54,7 +54,6 @@ export function ConnectionStatusIndicator({
       case 'connected':
         return colors.status.connected;
       case 'connecting':
-      case 'authenticating':
         return colors.status.connecting;
       case 'disconnected':
       case 'error':
@@ -70,8 +69,6 @@ export function ConnectionStatusIndicator({
         return 'Connected';
       case 'connecting':
         return 'Connecting...';
-      case 'authenticating':
-        return 'Authenticating...';
       case 'disconnected':
         return 'Disconnected';
       case 'error':
@@ -129,7 +126,6 @@ export function ConnectionStatusBadge({ status }: { status: ChatAdapterStatus })
       case 'connected':
         return colors.status.connected;
       case 'connecting':
-      case 'authenticating':
         return colors.status.connecting;
       default:
         return colors.status.disconnected;
@@ -156,9 +152,7 @@ export function ConnectionStatusBar({ connections }: StatusBarProps) {
   if (totalCount === 0) return null;
 
   const allConnected = connectedCount === totalCount;
-  const someConnecting = connections.some(
-    (c) => c.status === 'connecting' || c.status === 'authenticating'
-  );
+  const someConnecting = connections.some((c) => c.status === 'connecting');
   const hasErrors = connections.some((c) => c.status === 'error');
 
   const getStatusSummary = () => {

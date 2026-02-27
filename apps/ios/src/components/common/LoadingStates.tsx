@@ -3,11 +3,11 @@
  */
 
 import React, { useEffect, useRef } from 'react';
-import { View, StyleSheet, Animated, ViewStyle, Text } from 'react-native';
+import { View, StyleSheet, Animated, ViewStyle, DimensionValue, Text } from 'react-native';
 import { colors, spacing, borderRadius, typography } from '../../constants/theme';
 
 interface SkeletonProps {
-  width?: number | string;
+  width?: DimensionValue;
   height?: number;
   borderRadius?: number;
   style?: ViewStyle;

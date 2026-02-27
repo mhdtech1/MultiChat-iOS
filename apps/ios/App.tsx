@@ -385,6 +385,7 @@ export default function App() {
   // Add channel form state
   const [platformInput, setPlatformInput] = useState<PlatformId>('twitch');
   const [channelInput, setChannelInput] = useState('');
+  const [mergeSourceIds, setMergeSourceIds] = useState<string[]>([]);
   
   // Credentials state
   const [twitchUsername, setTwitchUsername] = useState('');
@@ -1013,6 +1014,76 @@ export default function App() {
     setChannelInput('');
     setMobileSection('chats');
   }, [sources]);
+
+  useEffect(() => {
+    const activeSourceIds = new Set(sources.map((source) => source.id));
+    setMergeSourceIds((prev) => prev.filter((sourceId) => activeSourceIds.has(sourceId)).slice(-2));
+  }, [sources]);
+
+  const toggleMergeSource = useCallback((sourceId: string) => {
+    setMergeSourceIds((prev) => {
+      if (prev.includes(sourceId)) {
+        return prev.filter((id) => id !== sourceId);
+      }
+      if (prev.length >= 2) {
+        return [prev[1], sourceId];
+      }
+      return [...prev, sourceId];
+    });
+  }, []);
+
+  const combineSelectedSources = useCallback(() => {
+    const sourceById = new Map(sources.map((source) => [source.id, source]));
+    const selected = Array.from(new Set(mergeSourceIds)).filter((sourceId) => sourceById.has(sourceId));
+    if (selected.length !== 2) return;
+
+    const normalizedSourceIds = [...selected].sort();
+    const existing = tabs.find((tab) => {
+      if (tab.sourceIds.length !== normalizedSourceIds.length) return false;
+      const tabIds = [...tab.sourceIds].sort();
+      return tabIds.every((tabSourceId, index) => tabSourceId === normalizedSourceIds[index]);
+    });
+
+    const isSingleTabForMergedSource = (tab: ChatTab) =>
+      tab.sourceIds.length === 1 && normalizedSourceIds.includes(tab.sourceIds[0]);
+
+    const isExactMergedTab = (tab: ChatTab) => {
+      if (tab.sourceIds.length !== normalizedSourceIds.length) return false;
+      const tabIds = [...tab.sourceIds].sort();
+      return tabIds.every((tabSourceId, index) => tabSourceId === normalizedSourceIds[index]);
+    };
+
+    if (existing) {
+      setTabs((prev) =>
+        prev.filter((tab) => {
+          if (tab.id === existing.id) return true;
+          if (isSingleTabForMergedSource(tab)) return false;
+          if (isExactMergedTab(tab)) return false;
+          return true;
+        })
+      );
+      setActiveTabId(existing.id);
+      setMobileSection('chats');
+      setMergeSourceIds([]);
+      return;
+    }
+
+    const label = normalizedSourceIds
+      .map((sourceId) => {
+        const source = sourceById.get(sourceId)!;
+        return `${PLATFORM_NAMES[source.platform]}/${source.channel}`;
+      })
+      .join(' + ');
+
+    const tabId = makeId();
+    setTabs((prev) => [
+      ...prev.filter((tab) => !isSingleTabForMergedSource(tab)),
+      { id: tabId, sourceIds: normalizedSourceIds, label },
+    ]);
+    setActiveTabId(tabId);
+    setMobileSection('chats');
+    setMergeSourceIds([]);
+  }, [mergeSourceIds, sources, tabs]);
   
   const removeChannel = useCallback((sourceId: string) => {
     // Disconnect adapter
@@ -2113,6 +2184,9 @@ export default function App() {
               onAddChannel={() => addChannel(platformInput, channelInput)}
               sources={sources}
               onRemoveChannel={removeChannel}
+              mergeSourceIds={mergeSourceIds}
+              onToggleMergeSource={toggleMergeSource}
+              onCombineSources={combineSelectedSources}
             />
           )}
           
@@ -2262,7 +2336,9 @@ const ChatsSection = memo(function ChatsSection({
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          style={styles.tabBarScroll}
           contentContainerStyle={styles.tabBar}
+          keyboardShouldPersistTaps="handled"
         >
           {tabs.map((tab) => {
             const tabSources = tab.sourceIds
@@ -2353,6 +2429,9 @@ interface AddChannelSectionProps {
   onAddChannel: () => void;
   sources: ChatSource[];
   onRemoveChannel: (id: string) => void;
+  mergeSourceIds: string[];
+  onToggleMergeSource: (id: string) => void;
+  onCombineSources: () => void;
 }
 
 const AddChannelSection = memo(function AddChannelSection({
@@ -2363,6 +2442,9 @@ const AddChannelSection = memo(function AddChannelSection({
   onAddChannel,
   sources,
   onRemoveChannel,
+  mergeSourceIds,
+  onToggleMergeSource,
+  onCombineSources,
 }: AddChannelSectionProps) {
   return (
     <ScrollView style={styles.addSection} contentContainerStyle={styles.addSectionContent}>
@@ -2413,16 +2495,46 @@ const AddChannelSection = memo(function AddChannelSection({
       {sources.length > 0 && (
         <View style={styles.activeChannels}>
           <Text style={styles.subsectionTitle}>Active Channels</Text>
-          {sources.map((source) => (
-            <View key={source.id} style={styles.channelRow}>
-              <View style={[styles.channelIndicator, { backgroundColor: PLATFORM_COLORS[source.platform] }]} />
-              <Text style={styles.channelName}>{source.channel}</Text>
-              <Text style={styles.channelPlatform}>{PLATFORM_NAMES[source.platform]}</Text>
-              <Pressable style={styles.removeButton} onPress={() => onRemoveChannel(source.id)}>
-                <Text style={styles.removeButtonText}>Remove</Text>
-              </Pressable>
-            </View>
-          ))}
+          {sources.map((source) => {
+            const isSelectedForMerge = mergeSourceIds.includes(source.id);
+            return (
+              <View key={source.id} style={styles.channelRow}>
+                <View style={[styles.channelIndicator, { backgroundColor: PLATFORM_COLORS[source.platform] }]} />
+                <Text style={styles.channelName}>{source.channel}</Text>
+                <Text style={styles.channelPlatform}>{PLATFORM_NAMES[source.platform]}</Text>
+                <Pressable
+                  style={[styles.mergeToggleButton, isSelectedForMerge && styles.mergeToggleButtonActive]}
+                  onPress={() => onToggleMergeSource(source.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Select ${source.channel} for merge`}
+                >
+                  <Text style={[styles.mergeToggleButtonText, isSelectedForMerge && styles.mergeToggleButtonTextActive]}>
+                    {isSelectedForMerge ? '✓' : '+'}
+                  </Text>
+                </Pressable>
+                <Pressable style={styles.removeButton} onPress={() => onRemoveChannel(source.id)}>
+                  <Text style={styles.removeButtonText}>Remove</Text>
+                </Pressable>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {sources.length > 1 && (
+        <View style={styles.mergePanel}>
+          <Text style={styles.subsectionTitle}>Merge Two Chats</Text>
+          <Text style={styles.mergeHint}>Select 2 active channels above, then combine into one merged chat tab.</Text>
+          <Pressable
+            style={[
+              styles.mergeActionButton,
+              mergeSourceIds.length !== 2 && styles.mergeActionButtonDisabled,
+            ]}
+            onPress={onCombineSources}
+            disabled={mergeSourceIds.length !== 2}
+          >
+            <Text style={styles.mergeActionButtonText}>Combine Selected ({mergeSourceIds.length}/2)</Text>
+          </Pressable>
         </View>
       )}
     </ScrollView>
@@ -2859,11 +2971,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border.default,
   },
+  tabBarScroll: {
+    flex: 1,
+  },
   tabBar: {
     flexDirection: 'row',
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
-    flex: 1,
+    paddingRight: spacing.md,
+    alignItems: 'center',
   },
   tab: {
     flexDirection: 'row',
@@ -3031,6 +3147,30 @@ const styles = StyleSheet.create({
     fontSize: typography.fontSize.sm,
     marginRight: spacing.md,
   },
+  mergeToggleButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: spacing.sm,
+    backgroundColor: colors.background.elevated,
+  },
+  mergeToggleButtonActive: {
+    borderColor: colors.accent.primary,
+    backgroundColor: colors.accent.primary + '22',
+  },
+  mergeToggleButtonText: {
+    color: colors.text.secondary,
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+    lineHeight: typography.fontSize.sm,
+  },
+  mergeToggleButtonTextActive: {
+    color: colors.text.primary,
+  },
   removeButton: {
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
@@ -3038,6 +3178,35 @@ const styles = StyleSheet.create({
   removeButtonText: {
     color: colors.status.error,
     fontSize: typography.fontSize.sm,
+  },
+  mergePanel: {
+    marginTop: spacing.md,
+    backgroundColor: colors.background.card,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    padding: spacing.md,
+  },
+  mergeHint: {
+    color: colors.text.secondary,
+    fontSize: typography.fontSize.sm,
+    marginBottom: spacing.sm,
+  },
+  mergeActionButton: {
+    backgroundColor: colors.accent.primary,
+    borderRadius: borderRadius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: accessibility.minTouchTarget,
+    paddingVertical: spacing.sm,
+  },
+  mergeActionButtonDisabled: {
+    opacity: 0.45,
+  },
+  mergeActionButtonText: {
+    color: colors.text.primary,
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
   },
   
   // OBS section
