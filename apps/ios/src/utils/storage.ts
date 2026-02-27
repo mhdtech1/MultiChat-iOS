@@ -209,9 +209,12 @@ export const normalizeObsSavedConnections = (value: unknown): ObsSavedConnection
       if (!host || !port) return null;
 
       const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : makeId();
-      const name = typeof record.name === 'string' && record.name.trim() ? record.name.trim() : host;
+      const nickname =
+        (typeof record.nickname === 'string' && record.nickname.trim()) ||
+        (typeof record.name === 'string' && record.name.trim()) ||
+        host;
       const password = typeof record.password === 'string' && record.password.trim() ? record.password : undefined;
-      return { id, name, host, port, password } satisfies ObsSavedConnection;
+      return { id, nickname, name: nickname, host, port, password } satisfies ObsSavedConnection;
     })
     .filter(Boolean) as ObsSavedConnection[];
 };

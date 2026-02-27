@@ -131,7 +131,9 @@ export type ObsStats = {
 
 export type ObsSavedConnection = {
   id: string;
-  name: string;
+  nickname?: string;
+  // Legacy compatibility with older saved payloads.
+  name?: string;
   host: string;
   port: string;
   password?: string;

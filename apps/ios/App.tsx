@@ -355,6 +355,139 @@ const obsVolumeToDb = (volumeMul: number) => {
 
 const formatObsDbValue = (volumeMul: number) => `${obsVolumeToDb(volumeMul).toFixed(1)} dB`;
 
+type ParsedObsConnection = {
+  host: string;
+  port: string;
+  password?: string;
+  nickname?: string;
+};
+
+const getObsConnectionNickname = (connection: { nickname?: string; name?: string; host: string }) =>
+  connection.nickname?.trim() || connection.name?.trim() || connection.host;
+
+const decodeObsQueryValue = (value: string) => {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, ' '));
+  } catch {
+    return value;
+  }
+};
+
+const parseObsConnectionFromQr = (rawPayload: string): ParsedObsConnection | null => {
+  const payload = rawPayload.trim();
+  if (!payload) return null;
+
+  // JSON payload support.
+  try {
+    const parsed = JSON.parse(payload);
+    const record = asRecord(parsed);
+    if (record) {
+      const hostCandidate =
+        (typeof record.host === 'string' && record.host.trim()) ||
+        (typeof record.hostname === 'string' && record.hostname.trim()) ||
+        '';
+      const portValue = record.port;
+      const portCandidate =
+        typeof portValue === 'number'
+          ? String(portValue)
+          : typeof portValue === 'string' && portValue.trim()
+            ? portValue.trim()
+            : '';
+      const passwordCandidate =
+        (typeof record.password === 'string' && record.password.trim()) ||
+        (typeof record.pass === 'string' && record.pass.trim()) ||
+        (typeof record.pwd === 'string' && record.pwd.trim()) ||
+        '';
+      const nicknameCandidate =
+        (typeof record.nickname === 'string' && record.nickname.trim()) ||
+        (typeof record.name === 'string' && record.name.trim()) ||
+        '';
+
+      if (hostCandidate) {
+        return {
+          host: hostCandidate,
+          port: portCandidate || '4455',
+          password: passwordCandidate || undefined,
+          nickname: nicknameCandidate || undefined,
+        };
+      }
+
+      if (typeof record.url === 'string' && record.url.trim()) {
+        return parseObsConnectionFromQr(record.url);
+      }
+    }
+  } catch {
+    // Non-JSON payload; continue.
+  }
+
+  // URI format: obsws://host:port?password=...
+  const uriMatch = payload.match(/^(obsws|ws|wss):\/\/([^/?#]+)(?:\/[^?#]*)?(?:\?([^#]*))?$/i);
+  if (uriMatch) {
+    const authority = uriMatch[2] ?? '';
+    const queryString = uriMatch[3] ?? '';
+
+    let host = '';
+    let port = '';
+
+    if (authority.startsWith('[')) {
+      const bracketEnd = authority.indexOf(']');
+      if (bracketEnd > 0) {
+        host = authority.slice(1, bracketEnd);
+        const portPart = authority.slice(bracketEnd + 1);
+        if (portPart.startsWith(':')) {
+          port = portPart.slice(1);
+        }
+      }
+    } else {
+      const lastColon = authority.lastIndexOf(':');
+      if (lastColon > 0 && /^\d+$/.test(authority.slice(lastColon + 1))) {
+        host = authority.slice(0, lastColon);
+        port = authority.slice(lastColon + 1);
+      } else {
+        host = authority;
+      }
+    }
+
+    if (host.trim()) {
+      let password = '';
+      let nickname = '';
+      if (queryString) {
+        for (const pair of queryString.split('&')) {
+          if (!pair) continue;
+          const [rawKey, ...rest] = pair.split('=');
+          const key = decodeObsQueryValue(rawKey || '').toLowerCase();
+          const value = decodeObsQueryValue(rest.join('=') || '');
+          if (!value) continue;
+          if (key === 'password' || key === 'pass' || key === 'pwd') {
+            password = value;
+          } else if (key === 'name' || key === 'label' || key === 'nickname' || key === 'nick') {
+            nickname = value;
+          }
+        }
+      }
+
+      return {
+        host: host.trim(),
+        port: port.trim() || '4455',
+        password: password || undefined,
+        nickname: nickname || undefined,
+      };
+    }
+  }
+
+  // Fallback format: host:port[:password]
+  const fallbackMatch = payload.match(/^([^:\s]+):(\d{2,5})(?::(.+))?$/);
+  if (fallbackMatch) {
+    return {
+      host: fallbackMatch[1].trim(),
+      port: fallbackMatch[2].trim(),
+      password: fallbackMatch[3]?.trim() || undefined,
+    };
+  }
+
+  return null;
+};
+
 // ============================================================================
 // Main App Component
 // ============================================================================
@@ -419,6 +552,7 @@ export default function App() {
   const [obsRecordTimecode, setObsRecordTimecode] = useState<number | null>(null);
   const [obsSavedConnections, setObsSavedConnections] = useState<ObsSavedConnection[]>([]);
   const [obsReachabilityMap, setObsReachabilityMap] = useState<Map<string, ObsReachability>>(new Map());
+  const [obsEditingConnectionId, setObsEditingConnectionId] = useState<string | null>(null);
   
   // Emotes and badges
   const [globalEmoteMap, setGlobalEmoteMap] = useState<Record<string, string>>({});
@@ -464,6 +598,7 @@ export default function App() {
   // Camera permission for OBS QR scanning
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [showQrScanner, setShowQrScanner] = useState(false);
+  const [qrScanLocked, setQrScanLocked] = useState(false);
   
   // Connection status state (P1 Recommendation #7)
   const [connectionStatuses, setConnectionStatuses] = useState<Map<string, ChatAdapterStatus>>(new Map());
@@ -475,6 +610,7 @@ export default function App() {
   const obsRequestIdRef = useRef(1);
   const obsRpcVersionRef = useRef(1);
   const obsRefreshInFlightRef = useRef(false);
+  const obsAuthPasswordRef = useRef('');
   const twitchBadgeRoomsLoadingRef = useRef<Set<string>>(new Set());
   const twitchBadgeRoomsLoadedRef = useRef<Set<string>>(new Set());
   const twitchChannelLookupLoadingRef = useRef<Set<string>>(new Set());
@@ -526,6 +662,10 @@ export default function App() {
       status: connectionStatuses.get(source.id) ?? 'disconnected' as ChatAdapterStatus,
     }));
   }, [sources, connectionStatuses]);
+
+  useEffect(() => {
+    obsAuthPasswordRef.current = obsPassword;
+  }, [obsPassword]);
   
   // ============================================================================
   // Keyboard Shortcuts (P2 Recommendation #10)
@@ -603,6 +743,21 @@ export default function App() {
       }
     };
   }, [isInitialized, persistState]);
+
+  const persistObsConnections = useCallback(async (connections: ObsSavedConnection[]) => {
+    const uri = getObsSavedConnectionsUri();
+    if (!uri) return;
+    try {
+      await FileSystemLegacy.writeAsStringAsync(uri, JSON.stringify(connections));
+    } catch (error) {
+      console.error('Failed to persist OBS connections:', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isInitialized) return;
+    void persistObsConnections(obsSavedConnections);
+  }, [isInitialized, obsSavedConnections, persistObsConnections]);
   
   // ============================================================================
   // Initialization
@@ -1458,12 +1613,13 @@ export default function App() {
         const challenge = typeof authBlock?.challenge === 'string' ? authBlock.challenge : '';
         const salt = typeof authBlock?.salt === 'string' ? authBlock.salt : '';
         if (challenge && salt) {
-          if (!obsPassword.trim()) {
+          const passwordForAuth = obsAuthPasswordRef.current.trim();
+          if (!passwordForAuth) {
             throw new Error('OBS requires a password.');
           }
           const secret = await Crypto.digestStringAsync(
             Crypto.CryptoDigestAlgorithm.SHA256,
-            `${obsPassword}${salt}`,
+            `${passwordForAuth}${salt}`,
             { encoding: Crypto.CryptoEncoding.BASE64 }
           );
           authentication = await Crypto.digestStringAsync(
@@ -1574,59 +1730,276 @@ export default function App() {
         pending.resolve(responseData);
       }
     },
-    [clamp01, obsPassword, readNumber, refreshObsState]
+    [clamp01, readNumber, refreshObsState]
+  );
+
+  const connectObsWithValues = useCallback(
+    (hostRaw: string, portRaw: string, passwordRaw: string) => {
+      if (obsConnecting || obsConnected) return;
+
+      const host = hostRaw.trim();
+      const port = portRaw.trim();
+      if (!host || !port) {
+        const message = 'OBS host and port are required.';
+        setObsStatusText(message);
+        pushObsError(message);
+        return;
+      }
+
+      obsAuthPasswordRef.current = passwordRaw.trim();
+      setObsConnecting(true);
+      setObsStatusText('Connecting...');
+
+      try {
+        const socket = new WebSocket(`ws://${host}:${port}`);
+        obsSocketRef.current = socket;
+
+        socket.onopen = () => {
+          setObsStatusText('Socket connected. Waiting for OBS handshake...');
+        };
+
+        socket.onmessage = (event) => {
+          void handleObsMessage(String(event.data)).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            setObsStatusText(message);
+            pushObsError(message);
+            disconnectObs('OBS authentication failed.');
+          });
+        };
+
+        socket.onerror = () => {
+          setObsStatusText('OBS socket error.');
+        };
+
+        socket.onclose = () => {
+          rejectAllObsPending('OBS connection closed.');
+          setObsConnected(false);
+          setObsConnecting(false);
+          setObsStatusText('Disconnected');
+        };
+      } catch (error) {
+        setObsConnecting(false);
+        setObsConnected(false);
+        const message = error instanceof Error ? error.message : String(error);
+        setObsStatusText(message);
+        pushObsError(message);
+      }
+    },
+    [disconnectObs, handleObsMessage, obsConnected, obsConnecting, pushObsError, rejectAllObsPending]
   );
 
   const connectObs = useCallback(() => {
-    if (obsConnecting || obsConnected) return;
+    connectObsWithValues(obsHost, obsPort, obsPassword);
+  }, [connectObsWithValues, obsHost, obsPassword, obsPort]);
 
+  const upsertObsSavedConnection = useCallback(
+    (connection: ParsedObsConnection, editingId?: string | null) => {
+      const host = connection.host.trim();
+      const port = connection.port.trim();
+      if (!host || !port) return;
+
+      const password = connection.password?.trim() || '';
+      const nickname = connection.nickname?.trim() || host;
+      const normalizedHost = host.toLowerCase();
+
+      setObsSavedConnections((previous) => {
+        const endpointMatch = previous.find(
+          (candidate) => candidate.host.toLowerCase() === normalizedHost && candidate.port === port
+        );
+        const targetId = editingId || endpointMatch?.id || makeId();
+        const nextConnection: ObsSavedConnection = {
+          id: targetId,
+          nickname,
+          name: nickname,
+          host,
+          port,
+          password: password || undefined,
+        };
+        const deduped = previous.filter(
+          (candidate) =>
+            candidate.id !== targetId &&
+            !(candidate.host.toLowerCase() === normalizedHost && candidate.port === port)
+        );
+        return [nextConnection, ...deduped];
+      });
+
+      setObsHost(host);
+      setObsPort(port);
+      setObsPassword(password);
+      setObsSavedName(nickname);
+      setObsEditingConnectionId(null);
+    },
+    []
+  );
+
+  const handleSaveCurrentObsConnection = useCallback(() => {
     const host = obsHost.trim();
     const port = obsPort.trim();
     if (!host || !port) {
-      const message = 'OBS host and port are required.';
-      setObsStatusText(message);
-      pushObsError(message);
+      pushObsError('Host and port are required before saving.');
+      return;
+    }
+    upsertObsSavedConnection(
+      {
+        host,
+        port,
+        password: obsPassword.trim() || undefined,
+        nickname: obsSavedName.trim() || host,
+      },
+      obsEditingConnectionId
+    );
+  }, [obsEditingConnectionId, obsHost, obsPassword, obsPort, obsSavedName, pushObsError, upsertObsSavedConnection]);
+
+  const handleEditSavedObsConnection = useCallback(
+    (connectionId: string) => {
+      const connection = obsSavedConnections.find((candidate) => candidate.id === connectionId);
+      if (!connection) return;
+      setObsEditingConnectionId(connection.id);
+      setObsSavedName(getObsConnectionNickname(connection));
+      setObsHost(connection.host);
+      setObsPort(connection.port);
+      setObsPassword(connection.password ?? '');
+    },
+    [obsSavedConnections]
+  );
+
+  const handleConnectSavedObsConnection = useCallback(
+    (connectionId: string) => {
+      const connection = obsSavedConnections.find((candidate) => candidate.id === connectionId);
+      if (!connection) return;
+
+      const password = connection.password ?? '';
+      setObsEditingConnectionId(connection.id);
+      setObsSavedName(getObsConnectionNickname(connection));
+      setObsHost(connection.host);
+      setObsPort(connection.port);
+      setObsPassword(password);
+
+      if (obsConnected || obsConnecting) {
+        disconnectObs('Switching OBS connection...');
+        setTimeout(() => {
+          connectObsWithValues(connection.host, connection.port, password);
+        }, 180);
+        return;
+      }
+
+      connectObsWithValues(connection.host, connection.port, password);
+    },
+    [connectObsWithValues, disconnectObs, obsConnected, obsConnecting, obsSavedConnections]
+  );
+
+  const handleOpenObsQrScanner = useCallback(async () => {
+    if (cameraPermission?.granted) {
+      setQrScanLocked(false);
+      setShowQrScanner(true);
       return;
     }
 
-    setObsConnecting(true);
-    setObsStatusText('Connecting...');
-
-    try {
-      const socket = new WebSocket(`ws://${host}:${port}`);
-      obsSocketRef.current = socket;
-
-      socket.onopen = () => {
-        setObsStatusText('Socket connected. Waiting for OBS handshake...');
-      };
-
-      socket.onmessage = (event) => {
-        void handleObsMessage(String(event.data)).catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          setObsStatusText(message);
-          pushObsError(message);
-          disconnectObs('OBS authentication failed.');
-        });
-      };
-
-      socket.onerror = () => {
-        setObsStatusText('OBS socket error.');
-      };
-
-      socket.onclose = () => {
-        rejectAllObsPending('OBS connection closed.');
-        setObsConnected(false);
-        setObsConnecting(false);
-        setObsStatusText('Disconnected');
-      };
-    } catch (error) {
-      setObsConnecting(false);
-      setObsConnected(false);
-      const message = error instanceof Error ? error.message : String(error);
-      setObsStatusText(message);
-      pushObsError(message);
+    const result = await requestCameraPermission();
+    if (result.granted) {
+      setQrScanLocked(false);
+      setShowQrScanner(true);
+      return;
     }
-  }, [disconnectObs, handleObsMessage, obsConnected, obsConnecting, obsHost, obsPort, pushObsError, rejectAllObsPending]);
+
+    pushObsError('Camera permission is required to scan OBS QR codes.');
+  }, [cameraPermission?.granted, pushObsError, requestCameraPermission]);
+
+  const handleObsQrScanned = useCallback(
+    (event: { data?: string }) => {
+      if (qrScanLocked) return;
+      const payload = typeof event?.data === 'string' ? event.data.trim() : '';
+      if (!payload) return;
+
+      setQrScanLocked(true);
+      const parsed = parseObsConnectionFromQr(payload);
+      if (!parsed) {
+        pushObsError('Could not parse OBS QR code. Expected obsws://host:port format.');
+        setTimeout(() => setQrScanLocked(false), 800);
+        return;
+      }
+
+      upsertObsSavedConnection(parsed);
+      setShowQrScanner(false);
+      setQrScanLocked(false);
+    },
+    [pushObsError, qrScanLocked, upsertObsSavedConnection]
+  );
+
+  const probeObsReachability = useCallback((hostRaw: string, portRaw: string): Promise<ObsReachability> => {
+    return new Promise((resolve) => {
+      const host = hostRaw.trim();
+      const port = portRaw.trim();
+      if (!host || !port) {
+        resolve('offline');
+        return;
+      }
+
+      let socket: WebSocket | null = null;
+      let settled = false;
+      const finish = (status: ObsReachability) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        if (socket) {
+          try {
+            socket.close();
+          } catch {
+            // No-op
+          }
+        }
+        resolve(status);
+      };
+
+      const timeoutId = setTimeout(() => finish('offline'), 2500);
+
+      try {
+        socket = new WebSocket(`ws://${host}:${port}`);
+        socket.onopen = () => finish('reachable');
+        socket.onerror = () => finish('offline');
+        socket.onclose = () => finish('offline');
+      } catch {
+        finish('offline');
+      }
+    });
+  }, []);
+
+  const refreshObsReachability = useCallback(
+    (connections: ObsSavedConnection[]) => {
+      for (const connection of connections) {
+        setObsReachabilityMap((previous) => {
+          const next = new Map(previous);
+          next.set(connection.id, 'checking');
+          return next;
+        });
+
+        void probeObsReachability(connection.host, connection.port).then((status) => {
+          setObsReachabilityMap((previous) => {
+            const next = new Map(previous);
+            next.set(connection.id, status);
+            return next;
+          });
+        });
+      }
+    },
+    [probeObsReachability]
+  );
+
+  useEffect(() => {
+    if (obsSavedConnections.length === 0) {
+      setObsReachabilityMap(new Map());
+      return;
+    }
+    refreshObsReachability(obsSavedConnections);
+  }, [obsSavedConnections, refreshObsReachability]);
+
+  useEffect(() => {
+    if (mobileSection !== 'obs' || obsSavedConnections.length === 0) return;
+    const intervalId = setInterval(() => {
+      refreshObsReachability(obsSavedConnections);
+    }, 45000);
+    return () => clearInterval(intervalId);
+  }, [mobileSection, obsSavedConnections, refreshObsReachability]);
 
   const switchObsScene = useCallback(
     async (sceneName: string) => {
@@ -2201,6 +2574,11 @@ export default function App() {
               setObsPort={setObsPort}
               obsPassword={obsPassword}
               setObsPassword={setObsPassword}
+              obsSavedName={obsSavedName}
+              setObsSavedName={setObsSavedName}
+              obsEditingConnectionId={obsEditingConnectionId}
+              obsSavedConnections={obsSavedConnections}
+              obsReachabilityMap={obsReachabilityMap}
               obsScenes={obsScenes}
               obsActiveScene={obsActiveScene}
               obsPreviewUri={obsPreviewUri}
@@ -2212,6 +2590,10 @@ export default function App() {
               obsStreamTimecode={obsStreamTimecode}
               obsRecordTimecode={obsRecordTimecode}
               onConnect={connectObs}
+              onConnectSavedConnection={handleConnectSavedObsConnection}
+              onEditSavedConnection={handleEditSavedObsConnection}
+              onSaveCurrentConnection={handleSaveCurrentObsConnection}
+              onOpenQrScanner={handleOpenObsQrScanner}
               onDisconnect={disconnectObs}
               onRefresh={refreshObsState}
               onSwitchScene={switchObsScene}
@@ -2271,6 +2653,49 @@ export default function App() {
           filter={messageFilters}
           onFilterChange={setMessageFilters}
         />
+
+        <Modal
+          visible={showQrScanner}
+          animationType="slide"
+          transparent={false}
+          onRequestClose={() => {
+            setShowQrScanner(false);
+            setQrScanLocked(false);
+          }}
+        >
+          <SafeAreaView style={styles.qrModalContainer}>
+            <View style={styles.qrModalHeader}>
+              <Text style={styles.qrModalTitle}>Scan OBS QR</Text>
+              <Pressable
+                style={styles.qrModalCloseButton}
+                onPress={() => {
+                  setShowQrScanner(false);
+                  setQrScanLocked(false);
+                }}
+              >
+                <Text style={styles.qrModalCloseButtonText}>Close</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.qrCameraFrame}>
+              {cameraPermission?.granted ? (
+                <CameraView
+                  style={styles.qrCamera}
+                  barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+                  onBarcodeScanned={showQrScanner && !qrScanLocked ? handleObsQrScanned : undefined}
+                />
+              ) : (
+                <View style={styles.qrCameraPlaceholder}>
+                  <Text style={styles.qrHintText}>Camera permission is required to scan QR codes.</Text>
+                </View>
+              )}
+            </View>
+
+            <Text style={styles.qrHintText}>
+              Scan an OBS connection QR (for example: obsws://host:port?password=...)
+            </Text>
+          </SafeAreaView>
+        </Modal>
         
         <StatusBar style="light" />
       </SafeAreaView>
@@ -2551,6 +2976,11 @@ interface ObsSectionProps {
   setObsPort: (value: string) => void;
   obsPassword: string;
   setObsPassword: (value: string) => void;
+  obsSavedName: string;
+  setObsSavedName: (value: string) => void;
+  obsEditingConnectionId: string | null;
+  obsSavedConnections: ObsSavedConnection[];
+  obsReachabilityMap: Map<string, ObsReachability>;
   obsScenes: string[];
   obsActiveScene: string | null;
   obsPreviewUri: string | null;
@@ -2562,6 +2992,10 @@ interface ObsSectionProps {
   obsStreamTimecode: number | null;
   obsRecordTimecode: number | null;
   onConnect: () => void;
+  onConnectSavedConnection: (connectionId: string) => void;
+  onEditSavedConnection: (connectionId: string) => void;
+  onSaveCurrentConnection: () => void;
+  onOpenQrScanner: () => void;
   onDisconnect: (reason?: string) => void;
   onRefresh: () => Promise<void>;
   onSwitchScene: (sceneName: string) => Promise<void>;
@@ -2583,6 +3017,11 @@ const ObsSection = memo(function ObsSection({
   setObsPort,
   obsPassword,
   setObsPassword,
+  obsSavedName,
+  setObsSavedName,
+  obsEditingConnectionId,
+  obsSavedConnections,
+  obsReachabilityMap,
   obsScenes,
   obsActiveScene,
   obsPreviewUri,
@@ -2594,6 +3033,10 @@ const ObsSection = memo(function ObsSection({
   obsStreamTimecode,
   obsRecordTimecode,
   onConnect,
+  onConnectSavedConnection,
+  onEditSavedConnection,
+  onSaveCurrentConnection,
+  onOpenQrScanner,
   onDisconnect,
   onRefresh,
   onSwitchScene,
@@ -2662,6 +3105,14 @@ const ObsSection = memo(function ObsSection({
           style={styles.obsInput}
         />
 
+        <TextInput
+          value={obsSavedName}
+          onChangeText={setObsSavedName}
+          placeholder="Nickname (optional)"
+          placeholderTextColor={colors.text.muted}
+          style={styles.obsInput}
+        />
+
         <View style={styles.obsStatusRow}>
           <Text style={styles.obsStatusLabel}>Status: {status}</Text>
           <Text style={styles.obsStatusValue} numberOfLines={1}>
@@ -2691,7 +3142,68 @@ const ObsSection = memo(function ObsSection({
             <Text style={styles.obsSecondaryButtonText}>Refresh</Text>
           </Pressable>
         </View>
+
+        <View style={styles.obsActionsRow}>
+          <Pressable onPress={onSaveCurrentConnection} style={styles.obsPrimaryButton}>
+            <Text style={styles.obsPrimaryButtonText}>
+              {obsEditingConnectionId ? 'Update Saved' : 'Save Connection'}
+            </Text>
+          </Pressable>
+          <Pressable onPress={onOpenQrScanner} style={styles.obsSecondaryButton}>
+            <Text style={styles.obsSecondaryButtonText}>Scan QR</Text>
+          </Pressable>
+        </View>
       </View>
+
+      {obsSavedConnections.length > 0 && (
+        <>
+          <Text style={styles.obsBlockTitle}>Saved Connections</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.obsSavedConnectionsRow}
+            style={styles.obsSavedConnectionsScroll}
+          >
+            {obsSavedConnections.map((connection) => {
+              const reachability = obsReachabilityMap.get(connection.id) ?? 'checking';
+              const reachabilityColor =
+                reachability === 'reachable'
+                  ? '#5fd66c'
+                  : reachability === 'checking'
+                    ? '#d0b14f'
+                    : '#e15d68';
+              const reachabilityLabel =
+                reachability === 'reachable' ? 'Reachable' : reachability === 'checking' ? 'Checking' : 'Offline';
+
+              return (
+                <View key={connection.id} style={styles.obsSavedConnectionCard}>
+                  <Text style={styles.obsSavedConnectionName} numberOfLines={1}>
+                    {getObsConnectionNickname(connection)}
+                  </Text>
+                  <Text style={styles.obsSavedConnectionHost} numberOfLines={1}>
+                    {connection.host}:{connection.port}
+                  </Text>
+                  <View style={styles.obsReachabilityRow}>
+                    <View style={[styles.obsReachabilityDot, { backgroundColor: reachabilityColor }]} />
+                    <Text style={styles.obsReachabilityText}>{reachabilityLabel}</Text>
+                  </View>
+                  <View style={styles.obsSavedCardActions}>
+                    <Pressable
+                      style={[styles.obsSavedCardConnectButton]}
+                      onPress={() => onConnectSavedConnection(connection.id)}
+                    >
+                      <Text style={styles.obsSavedCardConnectButtonText}>Connect</Text>
+                    </Pressable>
+                    <Pressable style={styles.obsSavedCardEditButton} onPress={() => onEditSavedConnection(connection.id)}>
+                      <Text style={styles.obsSavedCardEditButtonText}>Edit</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            })}
+          </ScrollView>
+        </>
+      )}
 
       {!obsConnected ? (
         <ObsNotConnectedEmptyState onConnect={onConnect} onLearnMore={() => {}} />
@@ -3230,6 +3742,85 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.lg,
   },
+  obsSavedConnectionsScroll: {
+    marginBottom: spacing.md,
+  },
+  obsSavedConnectionsRow: {
+    gap: spacing.md,
+    paddingBottom: spacing.xs,
+    paddingRight: spacing.sm,
+  },
+  obsSavedConnectionCard: {
+    width: 290,
+    backgroundColor: '#081634',
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: '#152650',
+    padding: spacing.lg,
+  },
+  obsSavedConnectionName: {
+    color: colors.text.primary,
+    fontSize: typography.fontSize.xxxl,
+    fontWeight: typography.fontWeight.bold,
+    textAlign: 'center',
+  },
+  obsSavedConnectionHost: {
+    color: colors.text.secondary,
+    fontSize: typography.fontSize.lg,
+    textAlign: 'center',
+    marginTop: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  obsReachabilityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  obsReachabilityDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+  },
+  obsReachabilityText: {
+    color: colors.text.primary,
+    fontSize: typography.fontSize.xl,
+    fontWeight: typography.fontWeight.semibold,
+  },
+  obsSavedCardActions: {
+    flexDirection: 'row',
+    gap: spacing.md,
+  },
+  obsSavedCardConnectButton: {
+    flex: 1,
+    minHeight: accessibility.minTouchTarget,
+    borderRadius: borderRadius.md,
+    backgroundColor: '#ef5965',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadows.sm,
+  },
+  obsSavedCardConnectButtonText: {
+    color: colors.text.primary,
+    fontSize: typography.fontSize.xl,
+    fontWeight: typography.fontWeight.semibold,
+  },
+  obsSavedCardEditButton: {
+    flex: 1,
+    minHeight: accessibility.minTouchTarget,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: '#ef5965',
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  obsSavedCardEditButtonText: {
+    color: colors.text.primary,
+    fontSize: typography.fontSize.xl,
+    fontWeight: typography.fontWeight.semibold,
+  },
   obsConnectionRow: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -3565,6 +4156,57 @@ const styles = StyleSheet.create({
   obsStatus: {
     color: colors.text.secondary,
     fontSize: typography.fontSize.md,
+  },
+  qrModalContainer: {
+    flex: 1,
+    backgroundColor: colors.background.primary,
+    padding: spacing.lg,
+    gap: spacing.md,
+  },
+  qrModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  qrModalTitle: {
+    color: colors.text.primary,
+    fontSize: typography.fontSize.xxl,
+    fontWeight: typography.fontWeight.bold,
+  },
+  qrModalCloseButton: {
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    backgroundColor: colors.background.elevated,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  qrModalCloseButtonText: {
+    color: colors.text.primary,
+    fontSize: typography.fontSize.sm,
+    fontWeight: typography.fontWeight.semibold,
+  },
+  qrCameraFrame: {
+    flex: 1,
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    overflow: 'hidden',
+    backgroundColor: colors.background.card,
+    minHeight: 320,
+  },
+  qrCamera: {
+    flex: 1,
+  },
+  qrCameraPlaceholder: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.lg,
+  },
+  qrHintText: {
+    color: colors.text.secondary,
+    fontSize: typography.fontSize.sm,
   },
   
   // Bottom navigation
