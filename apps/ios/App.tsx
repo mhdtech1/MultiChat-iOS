@@ -87,6 +87,7 @@ import {
   APP_STATE_FILENAME,
   OBS_SAVED_CONNECTIONS_FILENAME,
   TWITCH_GLOBAL_BADGES_URL,
+  FALLBACK_TWITCH_BADGES,
 } from './src/constants/config';
 import type {
   PlatformId,
@@ -237,14 +238,17 @@ const fetchTwitchGlobalBadgeMap = async (token?: string): Promise<Record<string,
       const parsed = JSON.parse(raw);
       const badges = parseTwitchBadgeMap(parsed);
       if (Object.keys(badges).length > 0) {
-        return badges;
+        // Merge API badges with fallback badges (API takes priority)
+        return { ...FALLBACK_TWITCH_BADGES, ...badges };
       }
     } catch {
       // Ignore and continue fallback chain.
     }
   }
 
-  return {};
+  // Return fallback badges when all API attempts fail
+  console.log('Using fallback Twitch badges - API requests failed');
+  return { ...FALLBACK_TWITCH_BADGES };
 };
 
 const fetchTwitchChannelBadgeMap = async (roomId: string, token?: string): Promise<Record<string, string>> => {
@@ -282,6 +286,7 @@ const fetchTwitchChannelBadgeMap = async (roomId: string, token?: string): Promi
     }
   }
 
+  // Channel badges not found - this is expected for channels without custom badges
   return {};
 };
 
