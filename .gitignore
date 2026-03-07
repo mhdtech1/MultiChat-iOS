@@ -7,6 +7,11 @@ node_modules
 **/.expo
 **/node_modules
 
+# Environment secrets – never commit real .env files
+.env
+.env.local
+.env.*.local
+
 # iOS generated artifacts
 **/ios/Pods
 **/ios/build

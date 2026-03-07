@@ -40,11 +40,11 @@ export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[] = defaultShor
   }, [shortcuts]);
 
   return {
-    shortcuts: defaultShortcuts,
-    registerShortcut: (shortcut: KeyboardShortcut) => {
+    shortcuts,
+    registerShortcut: (_shortcut: KeyboardShortcut) => {
       // Registration would be handled by native module
     },
-    unregisterShortcut: (key: string) => {
+    unregisterShortcut: (_key: string) => {
       // Unregistration would be handled by native module
     },
   };

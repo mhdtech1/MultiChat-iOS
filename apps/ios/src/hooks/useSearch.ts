@@ -2,7 +2,7 @@
  * P1 Recommendation #8: Search functionality across all chats
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import type { EnhancedChatMessage, SearchQuery, SearchResult, PlatformId } from '../types';
 import { SEARCH_DEBOUNCE_MS } from '../constants/config';
 import { getMessageAuthor } from '../utils/helpers';
@@ -11,6 +11,7 @@ export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
   const [query, setQuery] = useState<SearchQuery>({ text: '' });
   const [isSearching, setIsSearching] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const performSearch = useCallback((searchQuery: SearchQuery) => {
     if (!searchQuery.text.trim()) {
@@ -76,13 +77,24 @@ export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
     const newQuery = { ...query, text };
     setQuery(newQuery);
     
-    // Debounce the search
-    const timeoutId = setTimeout(() => {
+    // Clear any pending debounce before scheduling a new one
+    if (debounceRef.current !== null) {
+      clearTimeout(debounceRef.current);
+    }
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null;
       performSearch(newQuery);
     }, SEARCH_DEBOUNCE_MS);
-    
-    return () => clearTimeout(timeoutId);
   }, [query, performSearch]);
+
+  // Clean up the debounce timer when the hook unmounts
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current !== null) {
+        clearTimeout(debounceRef.current);
+      }
+    };
+  }, []);
 
   const clearSearch = useCallback(() => {
     setQuery({ text: '' });

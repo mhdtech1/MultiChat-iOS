@@ -158,6 +158,46 @@ const defaultNotificationPreferences: NotificationPreferences = {
   vibration: true,
 };
 
+const normalizeMessageFilters = (value: unknown): Partial<MessageFilter> => {
+  const record = asRecord(value);
+  if (!record) return {};
+  const result: Partial<MessageFilter> = {};
+  if (Array.isArray(record.platforms)) {
+    result.platforms = record.platforms.filter(
+      (p): p is PlatformId => p === 'twitch' || p === 'kick' || p === 'youtube'
+    );
+  }
+  if (Array.isArray(record.users)) {
+    result.users = record.users.filter((u): u is string => typeof u === 'string');
+  }
+  if (Array.isArray(record.keywords)) {
+    result.keywords = record.keywords.filter((k): k is string => typeof k === 'string');
+  }
+  if (typeof record.showSubscriptions === 'boolean') result.showSubscriptions = record.showSubscriptions;
+  if (typeof record.showRaids === 'boolean') result.showRaids = record.showRaids;
+  if (typeof record.showSuperChats === 'boolean') result.showSuperChats = record.showSuperChats;
+  if (typeof record.showBits === 'boolean') result.showBits = record.showBits;
+  return result;
+};
+
+const normalizeNotificationPreferences = (value: unknown): Partial<NotificationPreferences> => {
+  const record = asRecord(value);
+  if (!record) return {};
+  const result: Partial<NotificationPreferences> = {};
+  if (typeof record.enabled === 'boolean') result.enabled = record.enabled;
+  if (typeof record.mentions === 'boolean') result.mentions = record.mentions;
+  if (Array.isArray(record.keywords)) {
+    result.keywords = record.keywords.filter((k): k is string => typeof k === 'string');
+  }
+  if (typeof record.subscriptions === 'boolean') result.subscriptions = record.subscriptions;
+  if (typeof record.raids === 'boolean') result.raids = record.raids;
+  if (typeof record.superChats === 'boolean') result.superChats = record.superChats;
+  if (typeof record.bits === 'boolean') result.bits = record.bits;
+  if (typeof record.sound === 'boolean') result.sound = record.sound;
+  if (typeof record.vibration === 'boolean') result.vibration = record.vibration;
+  return result;
+};
+
 export const normalizePersistedAppState = (value: unknown): PersistedAppStateV1 | null => {
   const record = asRecord(value);
   if (!record) return null;
@@ -193,8 +233,8 @@ export const normalizePersistedAppState = (value: unknown): PersistedAppStateV1 
     obsSavedName: typeof record.obsSavedName === 'string' ? record.obsSavedName : '',
     obsDetailTab: normalizeObsDetailTab(record.obsDetailTab),
     hasCompletedOnboarding: typeof record.hasCompletedOnboarding === 'boolean' ? record.hasCompletedOnboarding : false,
-    messageFilters: record.messageFilters ? { ...defaultMessageFilters, ...(record.messageFilters as any) } : defaultMessageFilters,
-    notificationPreferences: record.notificationPreferences ? { ...defaultNotificationPreferences, ...(record.notificationPreferences as any) } : defaultNotificationPreferences,
+    messageFilters: record.messageFilters ? { ...defaultMessageFilters, ...normalizeMessageFilters(record.messageFilters) } : defaultMessageFilters,
+    notificationPreferences: record.notificationPreferences ? { ...defaultNotificationPreferences, ...normalizeNotificationPreferences(record.notificationPreferences) } : defaultNotificationPreferences,
   };
 };
 
@@ -206,7 +246,8 @@ export const normalizeObsSavedConnections = (value: unknown): ObsSavedConnection
       const record = entry as Record<string, unknown>;
       const host = typeof record.host === 'string' ? record.host.trim() : '';
       const port = typeof record.port === 'string' ? record.port.trim() : '';
-      if (!host || !port) return null;
+      const portNum = Number(port);
+      if (!host || !port || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) return null;
 
       const id = typeof record.id === 'string' && record.id.trim() ? record.id.trim() : makeId();
       const nickname =
@@ -230,7 +271,8 @@ export const loadAppState = async (): Promise<PersistedAppStateV1 | null> => {
     const content = await FileSystemLegacy.readAsStringAsync(uri);
     const parsed = JSON.parse(content);
     return normalizePersistedAppState(parsed);
-  } catch {
+  } catch (error) {
+    console.warn('Failed to load app state:', error);
     return null;
   }
 };
@@ -242,7 +284,8 @@ export const saveAppState = async (state: PersistedAppStateV1): Promise<boolean>
   try {
     await FileSystemLegacy.writeAsStringAsync(uri, JSON.stringify(state));
     return true;
-  } catch {
+  } catch (error) {
+    console.warn('Failed to save app state:', error);
     return false;
   }
 };
@@ -258,7 +301,8 @@ export const loadObsConnections = async (): Promise<ObsSavedConnection[]> => {
     const content = await FileSystemLegacy.readAsStringAsync(uri);
     const parsed = JSON.parse(content);
     return normalizeObsSavedConnections(parsed);
-  } catch {
+  } catch (error) {
+    console.warn('Failed to load OBS connections:', error);
     return [];
   }
 };
@@ -270,7 +314,8 @@ export const saveObsConnections = async (connections: ObsSavedConnection[]): Pro
   try {
     await FileSystemLegacy.writeAsStringAsync(uri, JSON.stringify(connections));
     return true;
-  } catch {
+  } catch (error) {
+    console.warn('Failed to save OBS connections:', error);
     return false;
   }
 };

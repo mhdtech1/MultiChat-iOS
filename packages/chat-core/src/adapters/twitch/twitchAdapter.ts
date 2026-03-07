@@ -9,6 +9,7 @@ export type TwitchAuth = {
 };
 
 const TWITCH_IRC_URL = "wss://irc-ws.chat.twitch.tv:443";
+const MAX_RECONNECT_ATTEMPTS = 10;
 
 export class TwitchAdapter implements ChatAdapter {
   private emitter = new EventEmitter();
@@ -135,6 +136,11 @@ export class TwitchAdapter implements ChatAdapter {
 
   private scheduleReconnect() {
     if (this.status === "disconnected") return;
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      this.logger?.(`Twitch IRC: giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts.`);
+      this.setStatus("error");
+      return;
+    }
     const delay = Math.min(30000, 1000 * 2 ** this.reconnectAttempts);
     this.reconnectAttempts += 1;
     this.setStatus("connecting");

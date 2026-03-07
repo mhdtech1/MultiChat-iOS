@@ -14,7 +14,7 @@ import {
   NativeScrollEvent,
 } from 'react-native';
 import { colors, spacing, borderRadius, typography } from '../../constants/theme';
-import type { EnhancedChatMessage, MessageFilter } from '../../types';
+import type { EnhancedChatMessage, MessageFilter, PlatformId } from '../../types';
 import { ChatMessage } from './ChatMessage';
 import { ChatListSkeleton } from '../common/LoadingStates';
 import { NoChatEmptyState, NoFilteredMessagesEmptyState } from '../common/EmptyStates';
@@ -56,7 +56,7 @@ export const ChatList = memo(function ChatList({
 
     return messages.filter((msg) => {
       // Platform filter
-      if (filter.platforms.length > 0 && !filter.platforms.includes(msg.platform as any)) {
+      if (filter.platforms.length > 0 && !filter.platforms.includes(msg.platform as PlatformId)) {
         return false;
       }
 
@@ -215,7 +215,12 @@ export const ChatList = memo(function ChatList({
 
       {/* Scroll to bottom button */}
       {showScrollToBottom && (
-        <Pressable style={styles.scrollToBottomButton} onPress={scrollToBottom}>
+        <Pressable
+          style={styles.scrollToBottomButton}
+          onPress={scrollToBottom}
+          accessibilityRole="button"
+          accessibilityLabel="Scroll to latest message"
+        >
           <Text style={styles.scrollToBottomIcon}>↓</Text>
           <Text style={styles.scrollToBottomText}>Go to latest message</Text>
         </Pressable>

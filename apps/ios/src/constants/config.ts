@@ -1,17 +1,25 @@
 /**
  * App configuration constants
+ *
+ * Sensitive values (client IDs, secrets) are read from environment variables
+ * injected at build time via Expo's `extra` config or a `.env` file.
+ * Fallback strings are empty so the app won't accidentally ship with stale
+ * credentials when the environment is not configured.
  */
 
 import type { PlatformId } from '../types';
+import Constants from 'expo-constants';
+
+const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, string | undefined>;
 
 export const PLATFORM_OPTIONS: PlatformId[] = ['twitch', 'kick', 'youtube'];
 
-export const TWITCH_CLIENT_ID = 'syeui9mom7i5f9060j03tydgpdywbh';
-export const KICK_CLIENT_ID = '01KGRFF03VYRJMB3W4369Y07CS';
-export const KICK_CLIENT_SECRET = '29f43591eb0496352c66ea36f55c5c21e3fbc5053ba22568194e0c950c174794';
+export const TWITCH_CLIENT_ID = extra.TWITCH_CLIENT_ID ?? process.env.TWITCH_CLIENT_ID ?? '';
+export const KICK_CLIENT_ID = extra.KICK_CLIENT_ID ?? process.env.KICK_CLIENT_ID ?? '';
+export const KICK_CLIENT_SECRET = extra.KICK_CLIENT_SECRET ?? process.env.KICK_CLIENT_SECRET ?? '';
 export const TWITCH_REDIRECT_URI = 'multichat://oauth/twitch';
 export const KICK_REDIRECT_URI = 'multichat://oauth/kick';
-export const YOUTUBE_CLIENT_ID = '1008732662207-rufcsa7rafob02h29docduk7pboim0s8.apps.googleusercontent.com';
+export const YOUTUBE_CLIENT_ID = extra.YOUTUBE_CLIENT_ID ?? process.env.YOUTUBE_CLIENT_ID ?? '';
 // Google OAuth native redirects typically require a dotted custom scheme.
 export const YOUTUBE_REDIRECT_URI = 'com.mhdtech.multichatios:/oauth/youtube';
 

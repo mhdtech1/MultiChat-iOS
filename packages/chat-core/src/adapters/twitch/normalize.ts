@@ -9,6 +9,8 @@ const unescapeIrcTagValue = (value: string) =>
     .replace(/\\n/g, "\n")
     .replace(/\\\\/g, "\\");
 
+const SYSTEM_MESSAGE_COLOR = "#f08a65";
+
 const buildSystemMessage = (
   message: IrcMessage,
   timestampMs: number,
@@ -27,7 +29,7 @@ const buildSystemMessage = (
     message: content,
     timestamp: new Date(timestampMs).toISOString(),
     badges: [],
-    color: "#f08a65",
+    color: SYSTEM_MESSAGE_COLOR,
     raw: {
       ...message.tags,
       ...extraRaw
