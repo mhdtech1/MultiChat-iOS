@@ -192,6 +192,7 @@ function SearchResultItem({ result, onPress, query }: SearchResultItemProps) {
   // Highlight matching text
   const highlightText = (text: string) => {
     if (!query.trim()) return text;
+    // Escape special regex characters to prevent injection attacks
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
     return parts.map((part, i) =>

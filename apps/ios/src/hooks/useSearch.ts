@@ -12,6 +12,8 @@ export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
   const [isSearching, setIsSearching] = useState(false);
   const [results, setResults] = useState<SearchResult[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queryRef = useRef(query);
+  queryRef.current = query;
 
   const performSearch = useCallback((searchQuery: SearchQuery) => {
     if (!searchQuery.text.trim()) {
@@ -74,7 +76,7 @@ export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
   }, [messages]);
 
   const search = useCallback((text: string) => {
-    const newQuery = { ...query, text };
+    const newQuery = { ...queryRef.current, text };
     setQuery(newQuery);
     
     // Clear any pending debounce before scheduling a new one
@@ -85,7 +87,7 @@ export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
       debounceRef.current = null;
       performSearch(newQuery);
     }, SEARCH_DEBOUNCE_MS);
-  }, [query, performSearch]);
+  }, [performSearch]);
 
   // Clean up the debounce timer when the hook unmounts
   useEffect(() => {
@@ -102,10 +104,10 @@ export function useSearch(messages: Map<string, EnhancedChatMessage[]>) {
   }, []);
 
   const setFilters = useCallback((filters: Partial<SearchQuery>) => {
-    const newQuery = { ...query, ...filters };
+    const newQuery = { ...queryRef.current, ...filters };
     setQuery(newQuery);
     performSearch(newQuery);
-  }, [query, performSearch]);
+  }, [performSearch]);
 
   return {
     query,
