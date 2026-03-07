@@ -12,6 +12,9 @@ node_modules
 .env.local
 .env.*.local
 
+# Build artifacts
+**/dist
+
 # iOS generated artifacts
 **/ios/Pods
 **/ios/build
