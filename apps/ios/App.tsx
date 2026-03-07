@@ -1,154 +1,57 @@
-/**
- * MultiChat iOS - Refactored App.tsx
- * 
- * This is the main application file, refactored from a 152KB monolithic file
- * into a clean, modular architecture implementing all 15 recommendations:
- * 
- * P0 - Critical:
- * 1. First-run onboarding flow (OnboardingWizard component)
- * 2. Empty states with CTAs (EmptyStates components)
- * 3. Graceful error handling (ErrorHandling components)
- * 4. Loading states and skeleton UI (LoadingStates components)
- * 
- * P1 - High Priority:
- * 5. Settings discoverability (SettingsScreen component)
- * 6. Message grouping by time (ChatMessage component)
- * 7. Connection status indicators (ConnectionStatus component)
- * 8. Search functionality (SearchOverlay component)
- * 9. Platform-specific features (ChatMessage component)
- * 
- * P2 - Nice to Have:
- * 10. Keyboard shortcuts (useKeyboardShortcuts hook)
- * 11. Message filtering (FilterSettings component)
- * 12. Notification preferences (SettingsScreen component)
- * 13. Performance optimization (memoization, virtualized lists)
- * 14. Accessibility features (proper labels, touch targets)
- * 15. Design system (theme constants)
- */
-
-import React, { useEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import * as Crypto from 'expo-crypto';
-import * as FileSystemLegacy from 'expo-file-system/legacy';
-import { StatusBar } from 'expo-status-bar';
-import * as WebBrowser from 'expo-web-browser';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as AuthSession from "expo-auth-session";
+import * as Crypto from "expo-crypto";
+import { StatusBar } from "expo-status-bar";
+import * as WebBrowser from "expo-web-browser";
 import {
   FlatList,
-  Image,
   KeyboardAvoidingView,
-  Modal,
   Platform as RNPlatform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
-  View,
-  AccessibilityInfo,
-} from 'react-native';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import type { ChatAdapter, ChatAdapterStatus, ChatMessage as ChatMessageType } from '@multichat/chat-core';
-import { KickAdapter, TwitchAdapter, YouTubeAdapter } from '@multichat/chat-core';
-
-// Import components
-import { OnboardingWizard } from './src/components/onboarding';
-import { ChatList } from './src/components/chat';
-import { SettingsScreen, FilterSettings } from './src/components/settings';
-import { SearchOverlay } from './src/components/search';
-import {
-  FullScreenLoading,
-  LoadingSpinner,
-  TabSkeleton,
-  ConnectionStatusBar,
-  ConnectionStatusBadge,
-  ErrorBanner,
-  NoChatEmptyState,
-  ObsNotConnectedEmptyState,
-} from './src/components/common';
-
-// Import design system and utilities
-import { colors, spacing, borderRadius, typography, shadows, accessibility } from './src/constants/theme';
-import {
-  PLATFORM_OPTIONS,
-  TWITCH_CLIENT_ID,
-  KICK_CLIENT_ID,
-  KICK_CLIENT_SECRET,
-  TWITCH_REDIRECT_URI,
-  KICK_REDIRECT_URI,
-  YOUTUBE_CLIENT_ID,
-  YOUTUBE_REDIRECT_URI,
-  TWITCH_SCOPES,
-  KICK_SCOPES,
-  YOUTUBE_SCOPES,
-  PLATFORM_LOGOS,
-  PLATFORM_NAMES,
-  PLATFORM_COLORS,
-  APP_STATE_FILENAME,
-  OBS_SAVED_CONNECTIONS_FILENAME,
-  TWITCH_GLOBAL_BADGES_URL,
-} from './src/constants/config';
-import type {
-  PlatformId,
-  ChatSource,
-  ChatTab,
-  TabMessageItem,
-  EnhancedChatMessage,
-  MobileSection,
-  ObsDetailTab,
-  AppError,
-  MessageFilter,
-  NotificationPreferences,
-  ObsSavedConnection,
-  ObsReachability,
-  ObsSceneItem,
-  ObsAudioInput,
-  ObsStats,
-} from './src/types';
-import {
-  makeId,
-  formatClock,
-  formatObsDuration,
-  statusLabel,
-  platformTag,
-  isWritable,
-  expandBadgeLookupKeys,
-  parseSevenTvEmoteMap,
-  parseTwitchBadgeMap,
-  readPossibleImageUri,
-  segmentMessageWithEmotes,
-  randomToken,
-  toBase64Url,
-  asRecord,
-  readNumber,
-  clamp01,
-  getMessageAuthor,
-  getMessageAuthorColor,
-} from './src/utils/helpers';
-import {
-  getAppStateUri,
-  getObsSavedConnectionsUri,
-  normalizePersistedAppState,
-  normalizeObsSavedConnections,
-  normalizePlatformId,
-  normalizeMobileSection,
-} from './src/utils/storage';
-import { useSearch } from './src/hooks/useSearch';
-import { useKeyboardShortcuts, formatShortcut } from './src/hooks/useKeyboardShortcuts';
+  View
+} from "react-native";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import type { ChatAdapter, ChatAdapterStatus, ChatMessage } from "@multichat/chat-core";
+import { KickAdapter, TwitchAdapter, YouTubeAdapter } from "@multichat/chat-core";
 
 WebBrowser.maybeCompleteAuthSession();
 
-// ============================================================================
-// Types retained from original for OBS functionality
-// ============================================================================
+type PlatformId = "twitch" | "kick" | "youtube";
+type ChatTabKind = "chat" | "obs";
+
+type ChatSource = {
+  id: string;
+  platform: PlatformId;
+  channel: string;
+};
+
+type ChatTab =
+  | {
+      id: string;
+      kind: "chat";
+      sourceIds: string[];
+      label: string;
+    }
+  | {
+      id: string;
+      kind: "obs";
+      label: string;
+    };
 
 type CredentialSnapshot = {
   twitchToken: string;
   twitchUsername: string;
   kickToken: string;
   kickUsername: string;
-  youtubeAccessToken: string;
-  youtubeRefreshToken: string;
+};
+
+type KickTokenResponse = {
+  access_token?: string;
+  refresh_token?: string;
 };
 
 type ObsPendingRequest = {
@@ -157,4085 +60,2110 @@ type ObsPendingRequest = {
   timeoutId: ReturnType<typeof setTimeout>;
 };
 
-const extractBadgeImageMapFromUnknown = (value: unknown, next: Record<string, string>) => {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      extractBadgeImageMapFromUnknown(entry, next);
-    }
-    return;
-  }
-
-  const record = asRecord(value);
-  if (!record) return;
-
-  const imageUri = readPossibleImageUri(record);
-  if (imageUri) {
-    const directKeys = ['set_id', 'setId', 'type', 'badge', 'text', 'label', 'name', 'slug', 'id'];
-    const rawCandidates: string[] = [];
-    for (const key of directKeys) {
-      const candidate = record[key];
-      if (typeof candidate === 'string' && candidate.trim()) {
-        rawCandidates.push(candidate.trim());
-      }
-    }
-
-    const setIdRaw =
-      (typeof record.set_id === 'string' && record.set_id.trim()) ||
-      (typeof record.setId === 'string' && record.setId.trim()) ||
-      (typeof record.type === 'string' && record.type.trim()) ||
-      '';
-    const versionRaw =
-      (typeof record.version === 'string' && record.version.trim()) ||
-      (typeof record.id === 'string' && record.id.trim()) ||
-      '';
-    if (setIdRaw && versionRaw && setIdRaw.toLowerCase() !== versionRaw.toLowerCase()) {
-      rawCandidates.push(`${setIdRaw}/${versionRaw}`);
-    }
-
-    for (const rawCandidate of rawCandidates) {
-      for (const expanded of expandBadgeLookupKeys(rawCandidate)) {
-        if (!next[expanded]) {
-          next[expanded] = imageUri;
-        }
-      }
-    }
-  }
-
-  if ('badges' in record) extractBadgeImageMapFromUnknown(record.badges, next);
-  if ('badge' in record) extractBadgeImageMapFromUnknown(record.badge, next);
-  if ('identity' in record) extractBadgeImageMapFromUnknown(record.identity, next);
-  if ('sender' in record) extractBadgeImageMapFromUnknown(record.sender, next);
-  if ('authorDetails' in record) extractBadgeImageMapFromUnknown(record.authorDetails, next);
+type ObsSceneItem = {
+  sceneItemId: number;
+  sourceName: string;
+  enabled: boolean;
 };
 
-const extractBadgeImageMapFromMessage = (message: ChatMessageType) => {
-  const discovered: Record<string, string> = {};
-  extractBadgeImageMapFromUnknown(message.raw, discovered);
-  return discovered;
+type ObsAudioInput = {
+  inputName: string;
+  muted: boolean;
+  volumeMul: number;
 };
 
-const fetchTwitchGlobalBadgeMap = async (token?: string): Promise<Record<string, string>> => {
-  const attempts: Array<{ url: string; headers?: Record<string, string> }> = [];
-  const trimmedToken = token?.trim() ?? '';
-  if (trimmedToken && TWITCH_CLIENT_ID.trim()) {
-    attempts.push({
-      url: 'https://api.twitch.tv/helix/chat/badges/global',
-      headers: {
-        Authorization: `Bearer ${trimmedToken}`,
-        'Client-Id': TWITCH_CLIENT_ID,
-      },
-    });
-  }
-  attempts.push({ url: TWITCH_GLOBAL_BADGES_URL });
-
-  for (const attempt of attempts) {
-    try {
-      const response = await fetch(attempt.url, { headers: attempt.headers });
-      if (!response.ok) continue;
-      const raw = await response.text();
-      if (!raw.trim().startsWith('{')) continue;
-      const parsed = JSON.parse(raw);
-      const badges = parseTwitchBadgeMap(parsed);
-      if (Object.keys(badges).length > 0) {
-        return badges;
-      }
-    } catch {
-      // Ignore and continue fallback chain.
-    }
-  }
-
-  return {};
+type ObsStats = {
+  cpuUsage: number | null;
+  activeFps: number | null;
+  outputSkippedFrames: number | null;
+  outputTotalFrames: number | null;
 };
 
-const fetchTwitchChannelBadgeMap = async (roomId: string, token?: string): Promise<Record<string, string>> => {
-  const normalizedRoomId = roomId.trim();
-  if (!normalizedRoomId) return {};
+type MobileSection = "chats" | "add" | "obs" | "settings";
 
-  const attempts: Array<{ url: string; headers?: Record<string, string> }> = [];
-  const trimmedToken = token?.trim() ?? '';
-  if (trimmedToken && TWITCH_CLIENT_ID.trim()) {
-    attempts.push({
-      url: `https://api.twitch.tv/helix/chat/badges?broadcaster_id=${encodeURIComponent(normalizedRoomId)}`,
-      headers: {
-        Authorization: `Bearer ${trimmedToken}`,
-        'Client-Id': TWITCH_CLIENT_ID,
-      },
-    });
+type ObsSendTarget = "__all__" | string;
+
+const PLATFORM_OPTIONS: PlatformId[] = ["twitch", "kick", "youtube"];
+
+const TWITCH_CLIENT_ID = "syeui9mom7i5f9060j03tydgpdywbh";
+const KICK_CLIENT_ID = "01KGRFF03VYRJMB3W4369Y07CS";
+const KICK_CLIENT_SECRET = "29f43591eb0496352c66ea36f55c5c21e3fbc5053ba22568194e0c950c174794";
+
+const TWITCH_SCOPES = [
+  "chat:read",
+  "chat:edit",
+  "moderator:manage:banned_users",
+  "moderator:manage:chat_messages",
+  "moderator:read:moderators"
+];
+
+const KICK_SCOPES = ["user:read", "channel:read", "chat:write", "moderation:ban", "moderation:chat_message:manage"];
+
+const OBS_ALL_SEND_TARGET: ObsSendTarget = "__all__";
+
+const makeId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+
+const normalizeChannelInput = (platform: PlatformId, input: string) => {
+  const trimmed = input.trim().replace(/^#/, "").replace(/^@/, "");
+  if (!trimmed) return "";
+  if (platform === "youtube") {
+    return trimmed;
   }
-  attempts.push({
-    url: `https://badges.twitch.tv/v1/badges/channels/${encodeURIComponent(normalizedRoomId)}/display?language=en`,
+  return trimmed.toLowerCase();
+};
+
+const formatClock = (timestamp: string) => {
+  const value = Date.parse(timestamp);
+  if (Number.isNaN(value)) return "--:--";
+  return new Date(value).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit"
   });
-
-  for (const attempt of attempts) {
-    try {
-      const response = await fetch(attempt.url, { headers: attempt.headers });
-      if (!response.ok) continue;
-      const raw = await response.text();
-      if (!raw.trim().startsWith('{')) continue;
-      const parsed = JSON.parse(raw);
-      const badges = parseTwitchBadgeMap(parsed);
-      if (Object.keys(badges).length > 0) {
-        return badges;
-      }
-    } catch {
-      // Try next fallback source.
-    }
-  }
-
-  return {};
 };
 
-const resolveTwitchUserId = async (loginRaw: string, token?: string): Promise<string> => {
-  const login = loginRaw.trim().toLowerCase();
-  if (!login) return '';
-  const trimmedToken = token?.trim() ?? '';
-  if (!trimmedToken || !TWITCH_CLIENT_ID.trim()) return '';
-
-  try {
-    const response = await fetch(
-      `https://api.twitch.tv/helix/users?login=${encodeURIComponent(login)}`,
-      {
-        headers: {
-          Authorization: `Bearer ${trimmedToken}`,
-          'Client-Id': TWITCH_CLIENT_ID,
-        },
-      }
-    );
-    if (!response.ok) return '';
-    const raw = await response.text();
-    if (!raw.trim().startsWith('{')) return '';
-    const parsed = JSON.parse(raw) as { data?: Array<{ id?: string }> };
-    const id = parsed.data?.[0]?.id;
-    return typeof id === 'string' ? id.trim() : '';
-  } catch {
-    return '';
-  }
+const messageTimestamp = (message: ChatMessage) => {
+  const parsed = Date.parse(message.timestamp);
+  return Number.isFinite(parsed) ? parsed : Date.now();
 };
 
-const parseAuthParamsFromCallbackUrl = (callbackUrl: string) => {
-  const hashIndex = callbackUrl.indexOf('#');
-  const baseWithQuery = hashIndex >= 0 ? callbackUrl.slice(0, hashIndex) : callbackUrl;
-  const fragment = hashIndex >= 0 ? callbackUrl.slice(hashIndex + 1) : '';
-  const queryIndex = baseWithQuery.indexOf('?');
-  const query = queryIndex >= 0 ? baseWithQuery.slice(queryIndex + 1) : '';
-
-  const params = new URLSearchParams(query);
-  if (fragment) {
-    const fragmentParams = new URLSearchParams(fragment);
-    fragmentParams.forEach((value, key) => {
-      if (!params.has(key)) {
-        params.set(key, value);
-      }
-    });
-  }
-  return params;
+const statusLabel = (status: ChatAdapterStatus | undefined) => {
+  if (!status) return "disconnected";
+  return status;
 };
 
-const summarizeHttpError = (status: number, body: string, fallback: string) => {
-  let detail = fallback;
-  try {
-    const parsed = JSON.parse(body) as { error?: string; error_description?: string; message?: string };
-    detail = parsed.error_description || parsed.message || parsed.error || fallback;
-  } catch {
-    if (body.trim()) {
-      detail = body.trim().slice(0, 180);
-    }
-  }
-  return `${fallback} (${status}): ${detail}`;
+const platformTag = (platform: PlatformId) => {
+  if (platform === "twitch") return "TW";
+  if (platform === "kick") return "KI";
+  return "YT";
 };
 
-const OBS_AUDIO_DB_TICKS = [0, -5, -10, -15, -20, -25, -30, -35, -40, -45, -50, -55, -60] as const;
-const OBS_MIXER_TRACK_HEIGHT = 200;
-const OBS_MIXER_THUMB_HEIGHT = 28;
-
-const obsVolumeToDb = (volumeMul: number) => {
-  if (!Number.isFinite(volumeMul) || volumeMul <= 0.0001) return -60;
-  return Math.max(-60, Math.min(12, 20 * Math.log10(volumeMul)));
+const isWritable = (platform: PlatformId, credentials: CredentialSnapshot) => {
+  void platform;
+  void credentials;
+  // OAuth is intentionally disabled in this iOS build for now.
+  // Keep all chat sources read-only to avoid sign-in setup friction.
+  return false;
 };
 
-const formatObsDbValue = (volumeMul: number) => `${obsVolumeToDb(volumeMul).toFixed(1)} dB`;
+const randomToken = () => `${Crypto.randomUUID().replace(/-/g, "")}${Date.now().toString(36)}`;
 
-type ParsedObsConnection = {
-  host: string;
-  port: string;
-  password?: string;
-  nickname?: string;
+const toBase64Url = (value: string) => value.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+
+const asRecord = (value: unknown): Record<string, unknown> | null => {
+  if (!value || typeof value !== "object") return null;
+  return value as Record<string, unknown>;
 };
 
-const getObsConnectionNickname = (connection: { nickname?: string; name?: string; host: string }) =>
-  connection.nickname?.trim() || connection.name?.trim() || connection.host;
-
-const decodeObsQueryValue = (value: string) => {
-  try {
-    return decodeURIComponent(value.replace(/\+/g, ' '));
-  } catch {
-    return value;
+const readNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) return parsed;
   }
-};
-
-const parseObsConnectionFromQr = (rawPayload: string): ParsedObsConnection | null => {
-  const payload = rawPayload.trim();
-  if (!payload) return null;
-
-  // JSON payload support.
-  try {
-    const parsed = JSON.parse(payload);
-    const record = asRecord(parsed);
-    if (record) {
-      const hostCandidate =
-        (typeof record.host === 'string' && record.host.trim()) ||
-        (typeof record.hostname === 'string' && record.hostname.trim()) ||
-        '';
-      const portValue = record.port;
-      const portCandidate =
-        typeof portValue === 'number'
-          ? String(portValue)
-          : typeof portValue === 'string' && portValue.trim()
-            ? portValue.trim()
-            : '';
-      const passwordCandidate =
-        (typeof record.password === 'string' && record.password.trim()) ||
-        (typeof record.pass === 'string' && record.pass.trim()) ||
-        (typeof record.pwd === 'string' && record.pwd.trim()) ||
-        '';
-      const nicknameCandidate =
-        (typeof record.nickname === 'string' && record.nickname.trim()) ||
-        (typeof record.name === 'string' && record.name.trim()) ||
-        '';
-
-      if (hostCandidate) {
-        return {
-          host: hostCandidate,
-          port: portCandidate || '4455',
-          password: passwordCandidate || undefined,
-          nickname: nicknameCandidate || undefined,
-        };
-      }
-
-      if (typeof record.url === 'string' && record.url.trim()) {
-        return parseObsConnectionFromQr(record.url);
-      }
-    }
-  } catch {
-    // Non-JSON payload; continue.
-  }
-
-  // URI format: obsws://host:port?password=...
-  const uriMatch = payload.match(/^(obsws|ws|wss):\/\/([^/?#]+)(?:\/[^?#]*)?(?:\?([^#]*))?$/i);
-  if (uriMatch) {
-    const authority = uriMatch[2] ?? '';
-    const queryString = uriMatch[3] ?? '';
-
-    let host = '';
-    let port = '';
-
-    if (authority.startsWith('[')) {
-      const bracketEnd = authority.indexOf(']');
-      if (bracketEnd > 0) {
-        host = authority.slice(1, bracketEnd);
-        const portPart = authority.slice(bracketEnd + 1);
-        if (portPart.startsWith(':')) {
-          port = portPart.slice(1);
-        }
-      }
-    } else {
-      const lastColon = authority.lastIndexOf(':');
-      if (lastColon > 0 && /^\d+$/.test(authority.slice(lastColon + 1))) {
-        host = authority.slice(0, lastColon);
-        port = authority.slice(lastColon + 1);
-      } else {
-        host = authority;
-      }
-    }
-
-    if (host.trim()) {
-      let password = '';
-      let nickname = '';
-      if (queryString) {
-        for (const pair of queryString.split('&')) {
-          if (!pair) continue;
-          const [rawKey, ...rest] = pair.split('=');
-          const key = decodeObsQueryValue(rawKey || '').toLowerCase();
-          const value = decodeObsQueryValue(rest.join('=') || '');
-          if (!value) continue;
-          if (key === 'password' || key === 'pass' || key === 'pwd') {
-            password = value;
-          } else if (key === 'name' || key === 'label' || key === 'nickname' || key === 'nick') {
-            nickname = value;
-          }
-        }
-      }
-
-      return {
-        host: host.trim(),
-        port: port.trim() || '4455',
-        password: password || undefined,
-        nickname: nickname || undefined,
-      };
-    }
-  }
-
-  // Fallback format: host:port[:password]
-  const fallbackMatch = payload.match(/^([^:\s]+):(\d{2,5})(?::(.+))?$/);
-  if (fallbackMatch) {
-    return {
-      host: fallbackMatch[1].trim(),
-      port: fallbackMatch[2].trim(),
-      password: fallbackMatch[3]?.trim() || undefined,
-    };
-  }
-
   return null;
 };
 
-// ============================================================================
-// Main App Component
-// ============================================================================
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
+const parseKickUserName = (response: unknown): string | undefined => {
+  if (!response || typeof response !== "object") return undefined;
+  const maybeData = (response as { data?: unknown }).data;
+  const user = Array.isArray(maybeData) ? maybeData[0] : maybeData;
+  if (!user || typeof user !== "object") return undefined;
+
+  const record = user as Record<string, unknown>;
+  if (typeof record.username === "string" && record.username.length > 0) return record.username;
+  if (typeof record.name === "string" && record.name.length > 0) return record.name;
+  if (typeof record.slug === "string" && record.slug.length > 0) return record.slug;
+  return undefined;
+};
+
+const fetchJsonOrThrow = async <T,>(response: Response, source: string): Promise<T> => {
+  const text = await response.text();
+  let parsed: any = {};
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = {};
+    }
+  }
+
+  if (!response.ok) {
+    const message =
+      (typeof parsed?.message === "string" && parsed.message) ||
+      (typeof parsed?.error_description === "string" && parsed.error_description) ||
+      (typeof parsed?.error?.message === "string" && parsed.error.message) ||
+      `${source} failed (${response.status}).`;
+    throw new Error(message);
+  }
+  return parsed as T;
+};
+
+const readAuthResultUrl = (result: WebBrowser.WebBrowserAuthSessionResult): string => {
+  const authResult = result as { type: string; url?: string };
+  if (authResult.type === "cancel" || authResult.type === "dismiss") {
+    throw new Error("Sign-in was cancelled.");
+  }
+  if (authResult.type !== "success" || !authResult.url) {
+    throw new Error("Sign-in did not return a callback URL.");
+  }
+  return authResult.url;
+};
+
+const createCodeChallenge = async (codeVerifier: string) => {
+  const digest = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, codeVerifier, {
+    encoding: Crypto.CryptoEncoding.BASE64
+  });
+  return toBase64Url(digest);
+};
+
+const sameSourceSet = (left: string[], right: string[]) => {
+  if (left.length !== right.length) return false;
+  const a = [...left].sort();
+  const b = [...right].sort();
+  for (let index = 0; index < a.length; index += 1) {
+    if (a[index] !== b[index]) return false;
+  }
+  return true;
+};
 
 export default function App() {
-  const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-
-  // ============================================================================
-  // State Management
-  // ============================================================================
-  
-  // Loading and initialization state (P0 Recommendation #4)
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  
-  // Onboarding state (P0 Recommendation #1)
-  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
-  
-  // Navigation state
-  const [mobileSection, setMobileSection] = useState<MobileSection>('chats');
-  
-  // Chat state
+  const [platformInput, setPlatformInput] = useState<PlatformId>("twitch");
+  const [channelInput, setChannelInput] = useState("");
+  const [composerText, setComposerText] = useState("");
   const [sources, setSources] = useState<ChatSource[]>([]);
   const [tabs, setTabs] = useState<ChatTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [messagesBySource, setMessagesBySource] = useState<Map<string, EnhancedChatMessage[]>>(new Map());
-  
-  // Add channel form state
-  const [platformInput, setPlatformInput] = useState<PlatformId>('twitch');
-  const [channelInput, setChannelInput] = useState('');
-  const [mergeSourceIds, setMergeSourceIds] = useState<string[]>([]);
-  
-  // Credentials state
-  const [twitchUsername, setTwitchUsername] = useState('');
-  const [twitchToken, setTwitchToken] = useState('');
-  const [kickUsername, setKickUsername] = useState('');
-  const [kickToken, setKickToken] = useState('');
-  const [kickRefreshToken, setKickRefreshToken] = useState('');
-  const [youtubeAccessToken, setYoutubeAccessToken] = useState('');
-  const [youtubeRefreshToken, setYoutubeRefreshToken] = useState('');
-  const [youtubeTokenExpiry, setYoutubeTokenExpiry] = useState(0);
-  const [youtubeUsername, setYoutubeUsername] = useState('');
-  
-  // OBS state
-  const [obsHost, setObsHost] = useState('127.0.0.1');
-  const [obsPort, setObsPort] = useState('4455');
-  const [obsPassword, setObsPassword] = useState('');
-  const [obsSavedName, setObsSavedName] = useState('');
-  const [obsDetailTab, setObsDetailTab] = useState<ObsDetailTab>('sceneItems');
+  const [messagesBySource, setMessagesBySource] = useState<Record<string, ChatMessage[]>>({});
+  const [statusBySource, setStatusBySource] = useState<Record<string, ChatAdapterStatus>>({});
+
+  const [twitchUsername, setTwitchUsername] = useState("");
+  const [twitchToken, setTwitchToken] = useState("");
+  const [kickUsername, setKickUsername] = useState("");
+  const [kickToken, setKickToken] = useState("");
+  const [kickRefreshToken, setKickRefreshToken] = useState("");
+  const [youtubeApiKey, setYoutubeApiKey] = useState("");
+
+  const [sendTargetId, setSendTargetId] = useState<ObsSendTarget>(OBS_ALL_SEND_TARGET);
+
+  const [mobileSection, setMobileSection] = useState<MobileSection>("chats");
+  const [busy, setBusy] = useState(false);
+  const [authBusy, setAuthBusy] = useState<"twitch" | "kick" | null>(null);
+  const [sending, setSending] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const [obsHost, setObsHost] = useState("127.0.0.1");
+  const [obsPort, setObsPort] = useState("4455");
+  const [obsPassword, setObsPassword] = useState("");
   const [obsConnected, setObsConnected] = useState(false);
   const [obsConnecting, setObsConnecting] = useState(false);
-  const [obsStatusText, setObsStatusText] = useState('Disconnected');
+  const [obsStatusText, setObsStatusText] = useState("Disconnected");
   const [obsScenes, setObsScenes] = useState<string[]>([]);
-  const [obsActiveScene, setObsActiveScene] = useState<string | null>(null);
-  const [obsPreviewUri, setObsPreviewUri] = useState<string | null>(null);
+  const [obsCurrentScene, setObsCurrentScene] = useState("");
   const [obsSceneItems, setObsSceneItems] = useState<ObsSceneItem[]>([]);
   const [obsAudioInputs, setObsAudioInputs] = useState<ObsAudioInput[]>([]);
-  const [obsStats, setObsStats] = useState<ObsStats>({ cpuUsage: null, activeFps: null, outputSkippedFrames: null, outputTotalFrames: null });
-  const [obsStreaming, setObsStreaming] = useState(false);
-  const [obsRecording, setObsRecording] = useState(false);
-  const [obsStreamTimecode, setObsStreamTimecode] = useState<number | null>(null);
-  const [obsRecordTimecode, setObsRecordTimecode] = useState<number | null>(null);
-  const [obsSavedConnections, setObsSavedConnections] = useState<ObsSavedConnection[]>([]);
-  const [obsReachabilityMap, setObsReachabilityMap] = useState<Map<string, ObsReachability>>(new Map());
-  const [obsEditingConnectionId, setObsEditingConnectionId] = useState<string | null>(null);
-  
-  // Emotes and badges
-  const [globalEmoteMap, setGlobalEmoteMap] = useState<Record<string, string>>({});
-  const [channelEmoteMaps, setChannelEmoteMaps] = useState<Map<string, Record<string, string>>>(new Map());
-  const [globalBadgeMap, setGlobalBadgeMap] = useState<Record<string, string>>({});
-  
-  // Error state (P0 Recommendation #3)
-  const [errors, setErrors] = useState<AppError[]>([]);
-  
-  // Filter state (P2 Recommendation #11)
-  const defaultMessageFilter: MessageFilter = {
-    platforms: ['twitch', 'kick', 'youtube'],
-    users: [],
-    keywords: [],
-    showSubscriptions: true,
-    showRaids: true,
-    showSuperChats: true,
-    showBits: true,
-  };
-  const [messageFilters, setMessageFilters] = useState<MessageFilter>(defaultMessageFilter);
-  const [showFilterModal, setShowFilterModal] = useState(false);
-  
-  // Notification preferences (P2 Recommendation #12)
-  const defaultNotificationPreferences: NotificationPreferences = {
-    enabled: false,
-    mentions: true,
-    keywords: [],
-    subscriptions: true,
-    raids: true,
-    superChats: true,
-    bits: true,
-    sound: true,
-    vibration: true,
-  };
-  const [notificationPreferences, setNotificationPreferences] = useState<NotificationPreferences>(defaultNotificationPreferences);
-  
-  // Search state (P1 Recommendation #8)
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  
-  // Camera permission for OBS QR scanning
-  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [showQrScanner, setShowQrScanner] = useState(false);
-  const [qrScanLocked, setQrScanLocked] = useState(false);
-  
-  // Connection status state (P1 Recommendation #7)
-  const [connectionStatuses, setConnectionStatuses] = useState<Map<string, ChatAdapterStatus>>(new Map());
-  
-  // Refs
+  const [obsStats, setObsStats] = useState<ObsStats>({
+    cpuUsage: null,
+    activeFps: null,
+    outputSkippedFrames: null,
+    outputTotalFrames: null
+  });
+  const [obsStreamActive, setObsStreamActive] = useState(false);
+  const [obsRecordActive, setObsRecordActive] = useState(false);
+
   const adaptersRef = useRef<Map<string, ChatAdapter>>(new Map());
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listRef = useRef<FlatList<ChatMessage>>(null);
+
   const obsSocketRef = useRef<WebSocket | null>(null);
-  const obsPendingRequestsRef = useRef<Map<string, ObsPendingRequest>>(new Map());
+  const obsPendingRef = useRef<Map<string, ObsPendingRequest>>(new Map());
   const obsRequestIdRef = useRef(1);
   const obsRpcVersionRef = useRef(1);
-  const obsRefreshInFlightRef = useRef(false);
-  const obsAuthPasswordRef = useRef('');
-  const twitchBadgeRoomsLoadingRef = useRef<Set<string>>(new Set());
-  const twitchBadgeRoomsLoadedRef = useRef<Set<string>>(new Set());
-  const twitchChannelLookupLoadingRef = useRef<Set<string>>(new Set());
-  const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  // ============================================================================
-  // Computed Values
-  // ============================================================================
-  
-  const activeTab = useMemo(() => tabs.find((t) => t.id === activeTabId) ?? null, [tabs, activeTabId]);
-  
-  const activeMessages = useMemo(() => {
-    if (!activeTab) return [];
-    const messages: EnhancedChatMessage[] = [];
-    for (const sourceId of activeTab.sourceIds) {
-      const sourceMessages = messagesBySource.get(sourceId) ?? [];
-      messages.push(...sourceMessages);
-    }
-    // Sort by timestamp
-    messages.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-    return messages;
-  }, [activeTab, messagesBySource]);
-  
-  const combinedEmoteMap = useMemo(() => {
-    const combined = { ...globalEmoteMap };
-    channelEmoteMaps.forEach((map) => {
-      Object.assign(combined, map);
-    });
-    return combined;
-  }, [globalEmoteMap, channelEmoteMaps]);
-  
-  const credentialSnapshot: CredentialSnapshot = useMemo(
-    () => ({
-      twitchToken,
-      twitchUsername,
-      kickToken,
-      kickUsername,
-      youtubeAccessToken,
-      youtubeRefreshToken,
-    }),
-    [twitchToken, twitchUsername, kickToken, kickUsername, youtubeAccessToken, youtubeRefreshToken]
+
+  const sourceById = useMemo(() => new Map(sources.map((source) => [source.id, source])), [sources]);
+
+  const activeTab = useMemo(() => tabs.find((tab) => tab.id === activeTabId) ?? null, [activeTabId, tabs]);
+  const chatTabs = useMemo(
+    () => tabs.filter((tab): tab is Extract<ChatTab, { kind: "chat" }> => tab.kind === "chat"),
+    [tabs]
   );
-  
-  const connectionStatusArray = useMemo(() => {
-    return sources.map((source) => ({
-      sourceId: source.id,
-      platform: source.platform,
-      channel: source.channel,
-      status: connectionStatuses.get(source.id) ?? 'disconnected' as ChatAdapterStatus,
-    }));
-  }, [sources, connectionStatuses]);
 
-  useEffect(() => {
-    obsAuthPasswordRef.current = obsPassword;
-  }, [obsPassword]);
-  
-  // ============================================================================
-  // Keyboard Shortcuts (P2 Recommendation #10)
-  // ============================================================================
-  
-  useKeyboardShortcuts([
-    { key: '1', modifiers: ['meta'], action: () => setMobileSection('chats'), description: 'Go to Chats' },
-    { key: '2', modifiers: ['meta'], action: () => setMobileSection('add'), description: 'Add Channel' },
-    { key: '3', modifiers: ['meta'], action: () => setMobileSection('obs'), description: 'OBS Control' },
-    { key: '4', modifiers: ['meta'], action: () => setMobileSection('settings'), description: 'Settings' },
-    { key: 'f', modifiers: ['meta'], action: () => setIsSearchOpen(true), description: 'Search' },
-  ]);
-  
-  // ============================================================================
-  // Persistence Functions
-  // ============================================================================
-  
-  const persistState = useCallback(async () => {
-    const uri = getAppStateUri();
-    if (!uri) return;
-    
-    try {
-      const state = {
-        version: 1,
-        platformInput,
-        channelInput,
-        mobileSection,
-        sources,
-        tabs,
-        activeTabId,
-        twitchUsername,
-        twitchToken,
-        kickUsername,
-        kickToken,
-        kickRefreshToken,
-        youtubeAccessToken,
-        youtubeRefreshToken,
-        youtubeTokenExpiry,
-        youtubeUsername,
-        obsHost,
-        obsPort,
-        obsPassword,
-        obsSavedName,
-        obsDetailTab,
-        hasCompletedOnboarding,
-        messageFilters,
-        notificationPreferences,
-      };
-      await FileSystemLegacy.writeAsStringAsync(uri, JSON.stringify(state));
-    } catch (e) {
-      console.error('Failed to persist state:', e);
+  const activeChatTab = useMemo(() => {
+    if (!activeTab || activeTab.kind !== "chat") return null;
+    return activeTab;
+  }, [activeTab]);
+
+  const activeChatSources = useMemo(() => {
+    if (!activeChatTab) return [];
+    return activeChatTab.sourceIds
+      .map((sourceId) => sourceById.get(sourceId))
+      .filter(Boolean) as ChatSource[];
+  }, [activeChatTab, sourceById]);
+
+  const activeMessages = useMemo(() => {
+    if (!activeChatTab) return [];
+    const merged = activeChatTab.sourceIds.flatMap((sourceId) => messagesBySource[sourceId] ?? []);
+    return merged.sort((left, right) => messageTimestamp(left) - messageTimestamp(right));
+  }, [activeChatTab, messagesBySource]);
+
+  const credentials = useMemo<CredentialSnapshot>(
+    () => ({
+      twitchUsername,
+      twitchToken,
+      kickUsername,
+      kickToken
+    }),
+    [kickToken, kickUsername, twitchToken, twitchUsername]
+  );
+
+  const writableActiveSources = useMemo(
+    () => activeChatSources.filter((source) => isWritable(source.platform, credentials)),
+    [activeChatSources, credentials]
+  );
+
+  const activeWritable = writableActiveSources.length > 0;
+
+  const twitchRedirectUri = useMemo(
+    () => AuthSession.makeRedirectUri({ scheme: "multichat", path: "oauth/twitch" }),
+    []
+  );
+
+  const kickRedirectUri = useMemo(
+    () => AuthSession.makeRedirectUri({ scheme: "multichat", path: "oauth/kick" }),
+    []
+  );
+
+  const channelPlaceholder =
+    platformInput === "youtube" ? "YouTube live chat ID" : `Enter ${platformInput} channel username`;
+
+  const showNotice = (message: string) => {
+    setNotice(message);
+    if (noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current);
     }
-  }, [
-    platformInput, channelInput, mobileSection, sources, tabs, activeTabId,
-    twitchUsername, twitchToken, kickUsername, kickToken, kickRefreshToken,
-    youtubeAccessToken, youtubeRefreshToken, youtubeTokenExpiry, youtubeUsername,
-    obsHost, obsPort, obsPassword, obsSavedName, obsDetailTab,
-    hasCompletedOnboarding, messageFilters, notificationPreferences,
-  ]);
-  
-  // Auto-persist with debouncing
-  useEffect(() => {
-    if (!isInitialized) return;
-    
-    if (persistTimeoutRef.current) {
-      clearTimeout(persistTimeoutRef.current);
-    }
-    persistTimeoutRef.current = setTimeout(() => {
-      persistState();
-    }, 500);
-    
-    return () => {
-      if (persistTimeoutRef.current) {
-        clearTimeout(persistTimeoutRef.current);
-      }
-    };
-  }, [isInitialized, persistState]);
+    noticeTimerRef.current = setTimeout(() => {
+      setNotice(null);
+    }, 5000);
+  };
 
-  const persistObsConnections = useCallback(async (connections: ObsSavedConnection[]) => {
-    const uri = getObsSavedConnectionsUri();
-    if (!uri) return;
-    try {
-      await FileSystemLegacy.writeAsStringAsync(uri, JSON.stringify(connections));
-    } catch (error) {
-      console.error('Failed to persist OBS connections:', error);
-    }
-  }, []);
+  const removeSourceState = (sourceId: string) => {
+    setMessagesBySource((previous) => {
+      const next = { ...previous };
+      delete next[sourceId];
+      return next;
+    });
+    setStatusBySource((previous) => {
+      const next = { ...previous };
+      delete next[sourceId];
+      return next;
+    });
+  };
 
-  useEffect(() => {
-    if (!isInitialized) return;
-    void persistObsConnections(obsSavedConnections);
-  }, [isInitialized, obsSavedConnections, persistObsConnections]);
-  
-  // ============================================================================
-  // Initialization
-  // ============================================================================
-  
-  useEffect(() => {
-    const initialize = async () => {
-      try {
-        let restoredTwitchToken = '';
-        // Load app state
-        const uri = getAppStateUri();
-        if (uri) {
-          try {
-            const info = await FileSystemLegacy.getInfoAsync(uri);
-            if (info.exists) {
-              const content = await FileSystemLegacy.readAsStringAsync(uri);
-              const parsed = JSON.parse(content);
-              const state = normalizePersistedAppState(parsed);
-              if (state) {
-                setPlatformInput(state.platformInput);
-                setChannelInput(state.channelInput);
-                setMobileSection(state.mobileSection);
-                setSources(state.sources);
-                setTabs(state.tabs);
-                setActiveTabId(state.activeTabId);
-                setTwitchUsername(state.twitchUsername);
-                setTwitchToken(state.twitchToken);
-                restoredTwitchToken = state.twitchToken;
-                setKickUsername(state.kickUsername);
-                setKickToken(state.kickToken);
-                setKickRefreshToken(state.kickRefreshToken);
-                setYoutubeAccessToken(state.youtubeAccessToken);
-                setYoutubeRefreshToken(state.youtubeRefreshToken);
-                setYoutubeTokenExpiry(state.youtubeTokenExpiry);
-                setYoutubeUsername(state.youtubeUsername);
-                setObsHost(state.obsHost);
-                setObsPort(state.obsPort);
-                setObsPassword(state.obsPassword);
-                setObsSavedName(state.obsSavedName);
-                setObsDetailTab(state.obsDetailTab);
-                setHasCompletedOnboarding(state.hasCompletedOnboarding);
-                if (state.messageFilters) setMessageFilters(state.messageFilters);
-                if (state.notificationPreferences) setNotificationPreferences(state.notificationPreferences);
-              }
-            }
-          } catch (e) {
-            console.error('Failed to load app state:', e);
-          }
-        }
-        
-        // Load OBS saved connections
-        const obsUri = getObsSavedConnectionsUri();
-        if (obsUri) {
-          try {
-            const info = await FileSystemLegacy.getInfoAsync(obsUri);
-            if (info.exists) {
-              const content = await FileSystemLegacy.readAsStringAsync(obsUri);
-              const parsed = JSON.parse(content);
-              const connections = normalizeObsSavedConnections(parsed);
-              setObsSavedConnections(connections);
-            }
-          } catch (e) {
-            console.error('Failed to load OBS connections:', e);
-          }
-        }
-        
-        // Load global badges
-        try {
-          const badges = await fetchTwitchGlobalBadgeMap(restoredTwitchToken);
-          if (Object.keys(badges).length > 0) {
-            setGlobalBadgeMap(badges);
-          }
-        } catch {
-          // Non-fatal; global badges are optional.
-        }
-        
-        setIsInitialized(true);
-        setIsLoading(false);
-      } catch (e) {
-        console.error('Initialization error:', e);
-        setIsLoading(false);
-        setIsInitialized(true);
-      }
-    };
-    
-    initialize();
-  }, []);
+  const snapshotCredentials = (override: Partial<CredentialSnapshot> = {}): CredentialSnapshot => ({
+    twitchToken: override.twitchToken ?? credentials.twitchToken,
+    twitchUsername: override.twitchUsername ?? credentials.twitchUsername,
+    kickToken: override.kickToken ?? credentials.kickToken,
+    kickUsername: override.kickUsername ?? credentials.kickUsername
+  });
 
-  useEffect(() => {
-    if (!twitchToken.trim()) return;
-    let cancelled = false;
-    const load = async () => {
-      const badges = await fetchTwitchGlobalBadgeMap(twitchToken);
-      if (cancelled || Object.keys(badges).length === 0) return;
-      setGlobalBadgeMap((prev) => ({ ...prev, ...badges }));
-    };
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [twitchToken]);
-
-  const ensureTwitchRoomBadges = useCallback(async (roomIdRaw: string) => {
-    const roomId = roomIdRaw.trim();
-    if (!roomId) return;
-    if (twitchBadgeRoomsLoadedRef.current.has(roomId) || twitchBadgeRoomsLoadingRef.current.has(roomId)) {
-      return;
-    }
-
-    twitchBadgeRoomsLoadingRef.current.add(roomId);
-    try {
-      const badges = await fetchTwitchChannelBadgeMap(roomId, twitchToken);
-      if (Object.keys(badges).length === 0) return;
-      twitchBadgeRoomsLoadedRef.current.add(roomId);
-      setGlobalBadgeMap((prev) => ({ ...prev, ...badges }));
-    } finally {
-      twitchBadgeRoomsLoadingRef.current.delete(roomId);
-    }
-  }, [twitchToken]);
-
-  useEffect(() => {
-    const twitchSources = sources.filter((source) => source.platform === 'twitch');
-    if (twitchSources.length === 0) return;
-
-    let cancelled = false;
-    const preload = async () => {
-      for (const source of twitchSources) {
-        const channel = source.channel.trim().toLowerCase();
-        if (!channel) continue;
-        if (twitchChannelLookupLoadingRef.current.has(channel)) continue;
-        twitchChannelLookupLoadingRef.current.add(channel);
-        try {
-          const roomId = await resolveTwitchUserId(channel, twitchToken);
-          if (!roomId || cancelled) continue;
-          await ensureTwitchRoomBadges(roomId);
-        } finally {
-          twitchChannelLookupLoadingRef.current.delete(channel);
-        }
-      }
-    };
-
-    void preload();
-    return () => {
-      cancelled = true;
-    };
-  }, [ensureTwitchRoomBadges, sources, twitchToken]);
-  
-  // ============================================================================
-  // Chat Adapter Management
-  // ============================================================================
-  
-  const createAdapter = useCallback((source: ChatSource) => {
-    let adapter: ChatAdapter;
-    
-    switch (source.platform) {
-      case 'twitch':
-        adapter = new TwitchAdapter({
-          channel: source.channel,
-          auth: twitchToken || twitchUsername
-            ? { username: twitchUsername || undefined, token: twitchToken || undefined }
-            : undefined,
-        });
-        break;
-      case 'kick':
-        adapter = new KickAdapter({
-          channel: source.channel,
-          auth: kickToken || kickUsername
-            ? {
-                accessToken: kickToken || undefined,
-                username: kickUsername || undefined,
-                guest: !kickToken,
-              }
-            : { guest: true },
-        });
-        break;
-      case 'youtube':
-        adapter = new YouTubeAdapter({
-          channel: source.channel,
-          auth: {
-            liveChatId: source.channel,
-          },
-        });
-        break;
-      default:
-        throw new Error(`Unknown platform: ${source.platform}`);
-    }
-    
-    // Handle messages
-    adapter.onMessage((message: ChatMessageType) => {
-      const author = getMessageAuthor(message);
-      const authorColor = getMessageAuthorColor(message);
-      const discoveredBadgeMap = extractBadgeImageMapFromMessage(message);
-      const enhanced: EnhancedChatMessage = {
-        ...message,
-        author,
-        authorColor,
-        // Add platform-specific metadata if available
-        twitchMeta: message.platform === 'twitch' ? extractTwitchMeta(message) : undefined,
-        youtubeMeta: message.platform === 'youtube' ? extractYouTubeMeta(message) : undefined,
-        kickMeta: message.platform === 'kick' ? extractKickMeta(message) : undefined,
-      };
-      
-      setMessagesBySource((prev) => {
-        const next = new Map(prev);
-        const existing = next.get(source.id) ?? [];
-        // Keep last 500 messages per source
-        const updated = [...existing, enhanced].slice(-500);
-        next.set(source.id, updated);
-        return next;
+  const buildAdapter = (platform: PlatformId, channel: string, auth: CredentialSnapshot): ChatAdapter => {
+    void auth;
+    if (platform === "twitch") {
+      return new TwitchAdapter({
+        channel
       });
+    }
 
-      if (Object.keys(discoveredBadgeMap).length > 0) {
-        setGlobalBadgeMap((prev) => {
-          let changed = false;
-          const merged = { ...prev };
-          for (const [key, imageUri] of Object.entries(discoveredBadgeMap)) {
-            if (!imageUri) continue;
-            if (!merged[key]) {
-              merged[key] = imageUri;
-              changed = true;
-            }
-          }
-          return changed ? merged : prev;
-        });
-      }
-
-      if (message.platform === 'twitch') {
-        const raw = asRecord(message.raw);
-        const roomIdValue = raw?.['room-id'];
-        const roomId =
-          typeof roomIdValue === 'string'
-            ? roomIdValue.trim()
-            : typeof roomIdValue === 'number'
-              ? String(roomIdValue)
-              : '';
-        if (roomId) {
-          void ensureTwitchRoomBadges(roomId);
+    if (platform === "kick") {
+      return new KickAdapter({
+        channel,
+        auth: {
+          accessToken: undefined,
+          username: undefined,
+          guest: true
         }
-      }
-    });
-    
-    // Handle status changes (P1 Recommendation #7)
-    adapter.onStatus((status: ChatAdapterStatus) => {
-      setConnectionStatuses((prev) => {
-        const next = new Map(prev);
-        next.set(source.id, status);
-        return next;
       });
-      if (status === 'error') {
-        setErrors((prev) => [
-          ...prev.slice(-4),
-          {
-            id: makeId(),
-            type: 'connection',
-            message: `${PLATFORM_NAMES[source.platform]}/${source.channel}: Connection entered error state`,
-            platform: source.platform,
-            retryable: true,
-            retryAction: async () => {
-              await adapter.connect();
-            },
-            timestamp: new Date(),
-          },
-        ]);
+    }
+
+    if (!youtubeApiKey.trim()) {
+      throw new Error("YouTube API key is required for read-only chat.");
+    }
+
+    return new YouTubeAdapter({
+      channel,
+      auth: {
+        apiKey: youtubeApiKey.trim(),
+        liveChatId: channel
       }
     });
-    
-    return adapter;
-  }, [ensureTwitchRoomBadges, kickToken, kickUsername, twitchToken, twitchUsername]);
-  
-  // P1 Recommendation #9: Extract platform-specific metadata
-  const extractTwitchMeta = (message: ChatMessageType) => {
-    const raw = message.raw as any;
-    if (!raw) return undefined;
-    return {
-      isRaid: raw.messageType === 'raid',
-      raidViewerCount: raw.raidViewerCount,
-      isBits: Boolean(raw.bits),
-      bitsAmount: raw.bits,
-      isSubscription: raw.messageType === 'subscription' || raw.messageType === 'resub',
-      subscriptionTier: raw.subscriptionTier,
-      subscriptionMonths: raw.subscriptionMonths,
-    };
   };
-  
-  const extractYouTubeMeta = (message: ChatMessageType) => {
-    const raw = message.raw as any;
-    if (!raw) return undefined;
-    return {
-      isSuperChat: raw.isSuperChat || raw.type === 'superChat',
-      superChatAmount: raw.superChatAmount || raw.amount,
-      superChatCurrency: raw.superChatCurrency || raw.currency,
-      isMembership: raw.isMembership || raw.type === 'membership',
-      membershipTier: raw.membershipTier,
-    };
-  };
-  
-  const extractKickMeta = (message: ChatMessageType) => {
-    const raw = message.raw as any;
-    if (!raw) return undefined;
-    return {
-      isGift: raw.isGift || raw.type === 'gift',
-      giftAmount: raw.giftAmount,
-      isHost: raw.isHost || raw.type === 'host',
-      hostViewerCount: raw.hostViewerCount,
-    };
-  };
-  
-  // Connect/disconnect adapters based on sources
-  useEffect(() => {
-    const currentAdapters = adaptersRef.current;
-    const sourceIds = new Set(sources.map((s) => s.id));
-    
-    // Disconnect removed sources
-    currentAdapters.forEach((adapter, id) => {
-      if (!sourceIds.has(id)) {
-        adapter.disconnect();
-        currentAdapters.delete(id);
-      }
+
+  const attachAdapter = (sourceId: string, adapter: ChatAdapter) => {
+    adapter.onStatus((status) => {
+      setStatusBySource((previous) => ({
+        ...previous,
+        [sourceId]: status
+      }));
     });
-    
-    // Connect new sources
-    sources.forEach((source) => {
-      if (!currentAdapters.has(source.id)) {
-        try {
-          const adapter = createAdapter(source);
-          currentAdapters.set(source.id, adapter);
-          void adapter.connect().catch((error: unknown) => {
-            const message = error instanceof Error ? error.message : String(error);
-            setErrors((prev) => [
-              ...prev.slice(-4),
-              {
-                id: makeId(),
-                type: 'connection',
-                message: `${PLATFORM_NAMES[source.platform]}/${source.channel}: ${message}`,
-                platform: source.platform,
-                retryable: true,
-                retryAction: async () => {
-                  await adapter.connect();
-                },
-                timestamp: new Date(),
-              },
-            ]);
-          });
-          
-          // Load channel emotes
-          loadChannelEmotes(source);
-        } catch (e) {
-          console.error(`Failed to create adapter for ${source.platform}/${source.channel}:`, e);
+
+    adapter.onMessage((message) => {
+      setMessagesBySource((previous) => {
+        const current = previous[sourceId] ?? [];
+        const next = [...current, message];
+        if (next.length > 800) {
+          next.splice(0, next.length - 800);
         }
-      }
+        return {
+          ...previous,
+          [sourceId]: next
+        };
+      });
     });
-  }, [sources, createAdapter]);
-  
-  // Load 7TV emotes for a channel
-  const loadChannelEmotes = async (source: ChatSource) => {
-    if (source.platform !== 'twitch') return;
-    
-    try {
-      const response = await fetch(`https://7tv.io/v3/users/twitch/${source.channel}`);
-      if (response.ok) {
-        const data = await response.json();
-        const emotes = parseSevenTvEmoteMap(data);
-        setChannelEmoteMaps((prev) => {
-          const next = new Map(prev);
-          next.set(source.id, emotes);
-          return next;
-        });
-      }
-    } catch (e) {
-      // Silently fail for emote loading
-    }
+
+    adaptersRef.current.set(sourceId, adapter);
   };
-  
-  // ============================================================================
-  // Channel Management
-  // ============================================================================
-  
-  const addChannel = useCallback((platform: PlatformId, channel: string) => {
-    const normalizedChannel = channel.trim().toLowerCase();
-    if (!normalizedChannel) return;
-    
-    // Check for duplicate
-    const exists = sources.some(
-      (s) => s.platform === platform && s.channel === normalizedChannel
-    );
-    if (exists) {
-      setErrors((prev) => [
-        ...prev.slice(-4),
-        {
-          id: makeId(),
-          type: 'unknown',
-          message: `${PLATFORM_NAMES[platform]}/${normalizedChannel} is already added`,
-          retryable: false,
-          timestamp: new Date(),
-        },
-      ]);
-      return;
-    }
-    
-    const sourceId = makeId();
-    const tabId = makeId();
-    
-    setSources((prev) => [...prev, { id: sourceId, platform, channel: normalizedChannel }]);
-    setTabs((prev) => [
-      ...prev,
-      { id: tabId, sourceIds: [sourceId], label: `${platform}/${normalizedChannel}` },
-    ]);
-    setActiveTabId(tabId);
-    setChannelInput('');
-    setMobileSection('chats');
-  }, [sources]);
 
-  useEffect(() => {
-    const activeSourceIds = new Set(sources.map((source) => source.id));
-    setMergeSourceIds((prev) => prev.filter((sourceId) => activeSourceIds.has(sourceId)).slice(-2));
-  }, [sources]);
-
-  const toggleMergeSource = useCallback((sourceId: string) => {
-    setMergeSourceIds((prev) => {
-      if (prev.includes(sourceId)) {
-        return prev.filter((id) => id !== sourceId);
-      }
-      if (prev.length >= 2) {
-        return [prev[1], sourceId];
-      }
-      return [...prev, sourceId];
-    });
-  }, []);
-
-  const combineSelectedSources = useCallback(() => {
-    const sourceById = new Map(sources.map((source) => [source.id, source]));
-    const selected = Array.from(new Set(mergeSourceIds)).filter((sourceId) => sourceById.has(sourceId));
-    if (selected.length !== 2) return;
-
-    const normalizedSourceIds = [...selected].sort();
-    const existing = tabs.find((tab) => {
-      if (tab.sourceIds.length !== normalizedSourceIds.length) return false;
-      const tabIds = [...tab.sourceIds].sort();
-      return tabIds.every((tabSourceId, index) => tabSourceId === normalizedSourceIds[index]);
-    });
-
-    const isSingleTabForMergedSource = (tab: ChatTab) =>
-      tab.sourceIds.length === 1 && normalizedSourceIds.includes(tab.sourceIds[0]);
-
-    const isExactMergedTab = (tab: ChatTab) => {
-      if (tab.sourceIds.length !== normalizedSourceIds.length) return false;
-      const tabIds = [...tab.sourceIds].sort();
-      return tabIds.every((tabSourceId, index) => tabSourceId === normalizedSourceIds[index]);
-    };
-
+  const connectSource = async (source: ChatSource, authOverride: Partial<CredentialSnapshot> = {}) => {
+    const existing = adaptersRef.current.get(source.id);
+    adaptersRef.current.delete(source.id);
     if (existing) {
-      setTabs((prev) =>
-        prev.filter((tab) => {
-          if (tab.id === existing.id) return true;
-          if (isSingleTabForMergedSource(tab)) return false;
-          if (isExactMergedTab(tab)) return false;
-          return true;
-        })
-      );
-      setActiveTabId(existing.id);
-      setMobileSection('chats');
-      setMergeSourceIds([]);
-      return;
+      await existing.disconnect().catch(() => {
+        // no-op
+      });
     }
 
-    const label = normalizedSourceIds
-      .map((sourceId) => {
-        const source = sourceById.get(sourceId)!;
-        return `${PLATFORM_NAMES[source.platform]}/${source.channel}`;
-      })
-      .join(' + ');
+    const adapter = buildAdapter(source.platform, source.channel, snapshotCredentials(authOverride));
+    attachAdapter(source.id, adapter);
+    setStatusBySource((previous) => ({
+      ...previous,
+      [source.id]: "connecting"
+    }));
+    await adapter.connect();
+  };
 
-    const tabId = makeId();
-    setTabs((prev) => [
-      ...prev.filter((tab) => !isSingleTabForMergedSource(tab)),
-      { id: tabId, sourceIds: normalizedSourceIds, label },
-    ]);
-    setActiveTabId(tabId);
-    setMobileSection('chats');
-    setMergeSourceIds([]);
-  }, [mergeSourceIds, sources, tabs]);
-  
-  const removeChannel = useCallback((sourceId: string) => {
-    // Disconnect adapter
-    const adapter = adaptersRef.current.get(sourceId);
-    if (adapter) {
-      adapter.disconnect();
-      adaptersRef.current.delete(sourceId);
-    }
-    
-    // Remove from state
-    setSources((prev) => prev.filter((s) => s.id !== sourceId));
-    setTabs((prev) => {
-      const updated = prev
-        .map((t) => ({ ...t, sourceIds: t.sourceIds.filter((id) => id !== sourceId) }))
-        .filter((t) => t.sourceIds.length > 0);
-      return updated;
-    });
-    setMessagesBySource((prev) => {
-      const next = new Map(prev);
-      next.delete(sourceId);
-      return next;
-    });
-    setConnectionStatuses((prev) => {
-      const next = new Map(prev);
-      next.delete(sourceId);
-      return next;
-    });
-  }, []);
-  
-  const closeTab = useCallback((tabId: string) => {
-    const tab = tabs.find((t) => t.id === tabId);
-    if (!tab) return;
-    
-    // If it's a single-source tab, remove the source too
-    if (tab.sourceIds.length === 1) {
-      removeChannel(tab.sourceIds[0]);
-    } else {
-      // Just remove the tab
-      setTabs((prev) => prev.filter((t) => t.id !== tabId));
-    }
-    
-    // Update active tab
-    if (activeTabId === tabId) {
-      const remaining = tabs.filter((t) => t.id !== tabId);
-      setActiveTabId(remaining[0]?.id ?? null);
-    }
-  }, [tabs, activeTabId, removeChannel]);
-  
-  // ============================================================================
-  // Error Management (P0 Recommendation #3)
-  // ============================================================================
-  
-  const removeError = useCallback((errorId: string) => {
-    setErrors((prev) => prev.filter((e) => e.id !== errorId));
-  }, []);
-  
-  // ============================================================================
-  // Search Functionality (P1 Recommendation #8)
-  // ============================================================================
-  
-  const handleSearch = useCallback((query: string) => {
-    setSearchQuery(query);
-    
-    if (!query.trim()) {
-      setSearchResults([]);
-      return;
-    }
-    
-    setIsSearching(true);
-    const searchText = query.toLowerCase();
-    const results: any[] = [];
-    
-    messagesBySource.forEach((msgs, sourceId) => {
-      for (const message of msgs) {
-        const author = getMessageAuthor(message).toLowerCase();
-        if (
-          message.message.toLowerCase().includes(searchText) ||
-          author.includes(searchText)
-        ) {
-          results.push({
-            message,
-            sourceId,
-            matchedText: message.message,
-            timestamp: new Date(message.timestamp),
-          });
-        }
+  const reconnectPlatformSources = async (platform: "twitch" | "kick", authOverride: Partial<CredentialSnapshot> = {}) => {
+    const targets = sources.filter((source) => source.platform === platform);
+    for (const source of targets) {
+      try {
+        await connectSource(source, authOverride);
+      } catch (error) {
+        setStatusBySource((previous) => ({
+          ...previous,
+          [source.id]: "error"
+        }));
+        showNotice(error instanceof Error ? error.message : String(error));
       }
-    });
-    
-    results.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-    setSearchResults(results.slice(0, 100));
-    setIsSearching(false);
-  }, [messagesBySource]);
+    }
+  };
 
-  // ============================================================================
-  // OBS Controller
-  // ============================================================================
+  const openChatTab = async (platform: PlatformId, rawChannel: string) => {
+    setMobileSection("chats");
+    const channel = normalizeChannelInput(platform, rawChannel);
+    if (!channel) {
+      showNotice("Enter a channel first.");
+      return;
+    }
 
-  const pushObsError = useCallback((message: string) => {
-    setErrors((prev) => [
-      ...prev.slice(-4),
-      {
+    const existingSource = sources.find((source) => source.platform === platform && source.channel === channel);
+    const source =
+      existingSource ??
+      ({
         id: makeId(),
-        type: 'connection',
-        message: `OBS: ${message}`,
-        retryable: false,
-        timestamp: new Date(),
-      },
-    ]);
-  }, []);
+        platform,
+        channel
+      } satisfies ChatSource);
 
-  const rejectAllObsPending = useCallback((reason: string) => {
-    const pendingEntries = Array.from(obsPendingRequestsRef.current.values());
-    obsPendingRequestsRef.current.clear();
+    const existingSingleTab = tabs.find(
+      (tab) => tab.kind === "chat" && tab.sourceIds.length === 1 && tab.sourceIds[0] === source.id
+    );
+    if (existingSingleTab) {
+      setActiveTabId(existingSingleTab.id);
+      showNotice("That chat is already open.");
+      return;
+    }
+
+    const nextTab: ChatTab = {
+      id: makeId(),
+      kind: "chat",
+      sourceIds: [source.id],
+      label: `${platform}/${channel}`
+    };
+
+    if (!existingSource) {
+      setSources((previous) => [...previous, source]);
+    }
+    setTabs((previous) => [...previous, nextTab]);
+    setActiveTabId(nextTab.id);
+
+    if (!adaptersRef.current.has(source.id)) {
+      setBusy(true);
+      try {
+        await connectSource(source);
+      } catch (error) {
+        setStatusBySource((previous) => ({
+          ...previous,
+          [source.id]: "error"
+        }));
+        showNotice(error instanceof Error ? error.message : String(error));
+      } finally {
+        setBusy(false);
+      }
+    }
+  };
+
+  const addChannelTab = async () => {
+    await openChatTab(platformInput, channelInput);
+    setChannelInput("");
+  };
+
+  const openCombinedTab = () => {
+    const sourceIds = Array.from(new Set(sources.map((source) => source.id)));
+    if (sourceIds.length < 2) {
+      showNotice("Open at least two chats before combining.");
+      return;
+    }
+
+    const existing = tabs.find(
+      (tab) => tab.kind === "chat" && tab.sourceIds.length > 1 && sameSourceSet(tab.sourceIds, sourceIds)
+    );
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+
+    const combinedTab: ChatTab = {
+      id: makeId(),
+      kind: "chat",
+      sourceIds,
+      label: `combined/${sourceIds.length} chats`
+    };
+    setTabs((previous) => [...previous, combinedTab]);
+    setActiveTabId(combinedTab.id);
+    setMobileSection("chats");
+  };
+
+  const openObsControllerTab = () => {
+    setMobileSection("obs");
+  };
+
+  const openChatsSection = () => {
+    setMobileSection("chats");
+    const currentActive = tabs.find((tab) => tab.id === activeTabId);
+    if (currentActive?.kind === "chat") return;
+    const firstChat = chatTabs[0];
+    setActiveTabId(firstChat?.id ?? null);
+  };
+
+  const openAddSection = () => {
+    setMobileSection("add");
+  };
+
+  const openSettingsSection = () => {
+    setMobileSection("settings");
+  };
+
+  const closeTab = async (tabId: string) => {
+    const tab = tabs.find((candidate) => candidate.id === tabId);
+    if (!tab) return;
+
+    const nextTabs = tabs.filter((candidate) => candidate.id !== tabId);
+    setTabs(nextTabs);
+    setActiveTabId((current) => {
+      if (current !== tabId) return current;
+      return nextTabs[0]?.id ?? null;
+    });
+
+    if (tab.kind === "obs") {
+      const socket = obsSocketRef.current;
+      obsSocketRef.current = null;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+      setObsConnected(false);
+      setObsConnecting(false);
+      setObsStatusText("Disconnected");
+      setObsScenes([]);
+      setObsCurrentScene("");
+      setObsSceneItems([]);
+      setObsAudioInputs([]);
+      setObsStats({
+        cpuUsage: null,
+        activeFps: null,
+        outputSkippedFrames: null,
+        outputTotalFrames: null
+      });
+      setObsStreamActive(false);
+      setObsRecordActive(false);
+      return;
+    }
+
+    const stillUsedSourceIds = new Set(
+      nextTabs.flatMap((candidate) => (candidate.kind === "chat" ? candidate.sourceIds : []))
+    );
+    const orphanedSourceIds = tab.sourceIds.filter((sourceId) => !stillUsedSourceIds.has(sourceId));
+
+    for (const sourceId of orphanedSourceIds) {
+      const adapter = adaptersRef.current.get(sourceId);
+      adaptersRef.current.delete(sourceId);
+      if (adapter) {
+        await adapter.disconnect().catch(() => {
+          // no-op
+        });
+      }
+      removeSourceState(sourceId);
+    }
+
+    if (orphanedSourceIds.length > 0) {
+      setSources((previous) => previous.filter((source) => !orphanedSourceIds.includes(source.id)));
+    }
+  };
+
+  const sendActiveMessage = async () => {
+    if (!activeChatTab) return;
+    const content = composerText.trim();
+    if (!content) return;
+
+    const targetSources =
+      sendTargetId === OBS_ALL_SEND_TARGET
+        ? writableActiveSources
+        : writableActiveSources.filter((source) => source.id === sendTargetId);
+
+    if (targetSources.length === 0) {
+      showNotice("No writable chats selected.");
+      return;
+    }
+
+    setSending(true);
+    const results = await Promise.allSettled(
+      targetSources.map(async (source) => {
+        const adapter = adaptersRef.current.get(source.id);
+        if (!adapter) {
+          throw new Error(`${source.platform}/${source.channel} is not connected yet.`);
+        }
+        await adapter.sendMessage(content);
+      })
+    );
+
+    const successCount = results.filter((result) => result.status === "fulfilled").length;
+    if (successCount > 0) {
+      setComposerText("");
+    }
+
+    const failures = results
+      .map((result, index) => {
+        if (result.status === "fulfilled") return null;
+        const source = targetSources[index];
+        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        return `${source.platform}/${source.channel}: ${reason}`;
+      })
+      .filter(Boolean) as string[];
+
+    if (failures.length > 0) {
+      const suffix = failures.length > 1 ? ` (+${failures.length - 1} more)` : "";
+      showNotice(`Send failed: ${failures[0]}${suffix}`);
+    }
+
+    setSending(false);
+  };
+
+  const openOwnChannelAfterSignIn = async (platform: "twitch" | "kick", usernameRaw: string) => {
+    const username = normalizeChannelInput(platform, usernameRaw);
+    if (!username) return;
+    await openChatTab(platform, username);
+  };
+
+  const signInTwitch = async () => {
+    if (authBusy) return;
+    setAuthBusy("twitch");
+    try {
+      const state = randomToken();
+      const authUrl = new URL("https://id.twitch.tv/oauth2/authorize");
+      authUrl.searchParams.set("client_id", TWITCH_CLIENT_ID);
+      authUrl.searchParams.set("redirect_uri", twitchRedirectUri);
+      authUrl.searchParams.set("response_type", "token");
+      authUrl.searchParams.set("scope", TWITCH_SCOPES.join(" "));
+      authUrl.searchParams.set("state", state);
+      authUrl.searchParams.set("force_verify", "true");
+
+      const callbackUrl = readAuthResultUrl(await WebBrowser.openAuthSessionAsync(authUrl.toString(), twitchRedirectUri));
+      const callback = new URL(callbackUrl);
+      const hash = callback.hash.startsWith("#") ? callback.hash.slice(1) : callback.hash;
+      const params = new URLSearchParams(hash);
+
+      const error = params.get("error");
+      if (error) {
+        const description = params.get("error_description") ?? "Twitch sign-in failed.";
+        throw new Error(description);
+      }
+      if (params.get("state") !== state) {
+        throw new Error("Twitch sign-in was rejected (state mismatch).");
+      }
+
+      const accessToken = params.get("access_token")?.trim() ?? "";
+      if (!accessToken) {
+        throw new Error("Twitch did not return an access token.");
+      }
+
+      const validateResponse = await fetch("https://id.twitch.tv/oauth2/validate", {
+        headers: {
+          Authorization: `OAuth ${accessToken}`
+        }
+      });
+      const validated = await fetchJsonOrThrow<{ login?: string }>(validateResponse, "Twitch token validation");
+      const username = validated.login?.trim() ?? "";
+      if (!username) {
+        throw new Error("Twitch token validation did not return a username.");
+      }
+
+      setTwitchToken(accessToken);
+      setTwitchUsername(username);
+      await reconnectPlatformSources("twitch", {
+        twitchToken: accessToken,
+        twitchUsername: username
+      });
+      await openOwnChannelAfterSignIn("twitch", username);
+      showNotice(`Signed in to Twitch as ${username}.`);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAuthBusy(null);
+    }
+  };
+
+  const signOutTwitch = async () => {
+    if (authBusy) return;
+    setAuthBusy("twitch");
+    setTwitchToken("");
+    setTwitchUsername("");
+    await reconnectPlatformSources("twitch", {
+      twitchToken: "",
+      twitchUsername: ""
+    });
+    showNotice("Signed out of Twitch.");
+    setAuthBusy(null);
+  };
+
+  const signInKick = async () => {
+    if (authBusy) return;
+    setAuthBusy("kick");
+    try {
+      const state = randomToken();
+      const codeVerifier = randomToken().repeat(2).replace(/[^a-zA-Z0-9]/g, "").slice(0, 64);
+      const codeChallenge = await createCodeChallenge(codeVerifier);
+
+      const authUrl = new URL("https://id.kick.com/oauth/authorize");
+      authUrl.searchParams.set("client_id", KICK_CLIENT_ID);
+      authUrl.searchParams.set("redirect_uri", kickRedirectUri);
+      authUrl.searchParams.set("response_type", "code");
+      authUrl.searchParams.set("scope", KICK_SCOPES.join(" "));
+      authUrl.searchParams.set("state", state);
+      authUrl.searchParams.set("code_challenge", codeChallenge);
+      authUrl.searchParams.set("code_challenge_method", "S256");
+
+      const callbackUrl = readAuthResultUrl(await WebBrowser.openAuthSessionAsync(authUrl.toString(), kickRedirectUri));
+      const callback = new URL(callbackUrl);
+      const error = callback.searchParams.get("error");
+      if (error) {
+        const description = callback.searchParams.get("error_description") ?? "Kick sign-in failed.";
+        throw new Error(description);
+      }
+      if (callback.searchParams.get("state") !== state) {
+        throw new Error("Kick sign-in was rejected (state mismatch).");
+      }
+      const code = callback.searchParams.get("code")?.trim() ?? "";
+      if (!code) {
+        throw new Error("Kick did not return an authorization code.");
+      }
+
+      const tokenResponse = await fetch("https://id.kick.com/oauth/token", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json"
+        },
+        body: new URLSearchParams({
+          code,
+          client_id: KICK_CLIENT_ID,
+          client_secret: KICK_CLIENT_SECRET,
+          redirect_uri: kickRedirectUri,
+          grant_type: "authorization_code",
+          code_verifier: codeVerifier
+        })
+      });
+      const tokens = await fetchJsonOrThrow<KickTokenResponse>(tokenResponse, "Kick token exchange");
+      const accessToken = tokens.access_token?.trim() ?? "";
+      if (!accessToken) {
+        throw new Error("Kick token exchange did not return an access token.");
+      }
+
+      const userResponse = await fetch("https://api.kick.com/public/v1/users", {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json"
+        }
+      });
+      const userPayload = await fetchJsonOrThrow<unknown>(userResponse, "Kick user profile");
+      const username = parseKickUserName(userPayload) ?? "";
+
+      setKickToken(accessToken);
+      setKickRefreshToken(tokens.refresh_token?.trim() ?? "");
+      setKickUsername(username);
+      await reconnectPlatformSources("kick", {
+        kickToken: accessToken,
+        kickUsername: username
+      });
+      if (username) {
+        await openOwnChannelAfterSignIn("kick", username);
+      }
+      showNotice(`Signed in to Kick${username ? ` as ${username}` : ""}.`);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAuthBusy(null);
+    }
+  };
+
+  const signOutKick = async () => {
+    if (authBusy) return;
+    setAuthBusy("kick");
+    setKickToken("");
+    setKickRefreshToken("");
+    setKickUsername("");
+    await reconnectPlatformSources("kick", {
+      kickToken: "",
+      kickUsername: ""
+    });
+    showNotice("Signed out of Kick.");
+    setAuthBusy(null);
+  };
+
+  const rejectAllObsPending = (reason: string) => {
+    const pendingEntries = Array.from(obsPendingRef.current.values());
+    obsPendingRef.current.clear();
     for (const pending of pendingEntries) {
       clearTimeout(pending.timeoutId);
       pending.reject(new Error(reason));
     }
-  }, []);
+  };
 
-  const disconnectObs = useCallback((reason = 'Disconnected') => {
+  const disconnectObs = (reason = "Disconnected") => {
     const socket = obsSocketRef.current;
     obsSocketRef.current = null;
-    if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
       socket.close();
     }
-
     rejectAllObsPending(reason);
     setObsConnected(false);
     setObsConnecting(false);
     setObsStatusText(reason);
-    setObsScenes([]);
-    setObsActiveScene(null);
-    setObsPreviewUri(null);
     setObsSceneItems([]);
     setObsAudioInputs([]);
-    setObsStreaming(false);
-    setObsRecording(false);
-    setObsStreamTimecode(null);
-    setObsRecordTimecode(null);
     setObsStats({
       cpuUsage: null,
       activeFps: null,
       outputSkippedFrames: null,
-      outputTotalFrames: null,
+      outputTotalFrames: null
     });
-  }, [rejectAllObsPending]);
+  };
 
-  const sendObsRequest = useCallback(
-    async <T extends Record<string, unknown> = Record<string, unknown>>(
-      requestType: string,
-      requestData: Record<string, unknown> = {}
-    ): Promise<T> => {
-      const socket = obsSocketRef.current;
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        throw new Error('OBS is not connected.');
+  const sendObsRequest = async <T extends Record<string, unknown> = Record<string, unknown>>(
+    requestType: string,
+    requestData: Record<string, unknown> = {}
+  ): Promise<T> => {
+    const socket = obsSocketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      throw new Error("OBS is not connected.");
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const requestId = `r-${Date.now()}-${obsRequestIdRef.current++}`;
+      const timeoutId = setTimeout(() => {
+        obsPendingRef.current.delete(requestId);
+        reject(new Error(`${requestType} timed out.`));
+      }, 8000);
+
+      obsPendingRef.current.set(requestId, {
+        resolve: (value) => resolve(value as T),
+        reject,
+        timeoutId
+      });
+
+      socket.send(
+        JSON.stringify({
+          op: 6,
+          d: {
+            requestType,
+            requestId,
+            requestData
+          }
+        })
+      );
+    });
+  };
+
+  const refreshObsState = async () => {
+    try {
+      const [sceneList, streamStatus, recordStatus, statsResponse] = await Promise.all([
+        sendObsRequest("GetSceneList"),
+        sendObsRequest("GetStreamStatus"),
+        sendObsRequest("GetRecordStatus"),
+        sendObsRequest("GetStats")
+      ]);
+
+      const scenesRaw = Array.isArray(sceneList.scenes) ? sceneList.scenes : [];
+      const sceneNames = scenesRaw
+        .map((item) => {
+          const record = asRecord(item);
+          return typeof record?.sceneName === "string" ? record.sceneName : "";
+        })
+        .filter(Boolean);
+
+      setObsScenes(sceneNames);
+      const currentSceneName =
+        typeof sceneList.currentProgramSceneName === "string" ? sceneList.currentProgramSceneName : "";
+      setObsCurrentScene(currentSceneName);
+
+      const streamActive = streamStatus.outputActive === true;
+      const recordActive = recordStatus.outputActive === true;
+      setObsStreamActive(streamActive);
+      setObsRecordActive(recordActive);
+
+      setObsStats({
+        cpuUsage: readNumber(statsResponse.cpuUsage),
+        activeFps: readNumber(statsResponse.activeFps),
+        outputSkippedFrames: readNumber(statsResponse.outputSkippedFrames),
+        outputTotalFrames: readNumber(statsResponse.outputTotalFrames)
+      });
+
+      if (currentSceneName) {
+        const sceneItemsResponse = await sendObsRequest("GetSceneItemList", {
+          sceneName: currentSceneName
+        });
+        const sceneItemsRaw = Array.isArray(sceneItemsResponse.sceneItems) ? sceneItemsResponse.sceneItems : [];
+        const sceneItems: ObsSceneItem[] = sceneItemsRaw
+          .map((item) => {
+            const record = asRecord(item);
+            const id = readNumber(record?.sceneItemId);
+            const name = typeof record?.sourceName === "string" ? record.sourceName : "";
+            const enabled = record?.sceneItemEnabled === true;
+            if (!id || !name) return null;
+            return {
+              sceneItemId: id,
+              sourceName: name,
+              enabled
+            } satisfies ObsSceneItem;
+          })
+          .filter(Boolean) as ObsSceneItem[];
+        setObsSceneItems(sceneItems);
+      } else {
+        setObsSceneItems([]);
       }
 
-      return new Promise<T>((resolve, reject) => {
-        const requestId = `r-${Date.now()}-${obsRequestIdRef.current++}`;
-        const timeoutId = setTimeout(() => {
-          obsPendingRequestsRef.current.delete(requestId);
-          reject(new Error(`${requestType} timed out.`));
-        }, 8000);
+      const inputListResponse = await sendObsRequest("GetInputList");
+      const inputRows = Array.isArray(inputListResponse.inputs) ? inputListResponse.inputs : [];
+      const inputNames = inputRows
+        .map((item) => {
+          const row = asRecord(item);
+          return typeof row?.inputName === "string" ? row.inputName : "";
+        })
+        .filter(Boolean);
+      const uniqueInputNames = Array.from(new Set(inputNames));
 
-        obsPendingRequestsRef.current.set(requestId, {
-          resolve: (value) => resolve(value as T),
-          reject,
-          timeoutId,
+      const audioStates = await Promise.all(
+        uniqueInputNames.map(async (inputName) => {
+          try {
+            const [muteResponse, volumeResponse] = await Promise.all([
+              sendObsRequest("GetInputMute", { inputName }),
+              sendObsRequest("GetInputVolume", { inputName })
+            ]);
+            return {
+              inputName,
+              muted: muteResponse.inputMuted === true,
+              volumeMul: clamp01(readNumber(volumeResponse.inputVolumeMul) ?? 1)
+            } satisfies ObsAudioInput;
+          } catch {
+            return null;
+          }
+        })
+      );
+      setObsAudioInputs(audioStates.filter(Boolean) as ObsAudioInput[]);
+    } catch (error) {
+      setObsStatusText(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const handleObsMessage = async (raw: string) => {
+    let payload: any = null;
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    if (!payload || typeof payload !== "object") return;
+    if (typeof payload.op !== "number") return;
+
+    if (payload.op === 0) {
+      const hello = asRecord(payload.d);
+      const rpcVersion = typeof hello?.rpcVersion === "number" ? hello.rpcVersion : 1;
+      obsRpcVersionRef.current = rpcVersion;
+
+      let authentication: string | undefined;
+      const authBlock = asRecord(hello?.authentication);
+      const challenge = typeof authBlock?.challenge === "string" ? authBlock.challenge : "";
+      const salt = typeof authBlock?.salt === "string" ? authBlock.salt : "";
+      if (challenge && salt) {
+        if (!obsPassword.trim()) {
+          throw new Error("OBS requires a password.");
+        }
+        const secret = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `${obsPassword}${salt}`, {
+          encoding: Crypto.CryptoEncoding.BASE64
         });
-
-        socket.send(
-          JSON.stringify({
-            op: 6,
-            d: {
-              requestType,
-              requestId,
-              requestData,
-            },
-          })
+        authentication = await Crypto.digestStringAsync(
+          Crypto.CryptoDigestAlgorithm.SHA256,
+          `${secret}${challenge}`,
+          {
+            encoding: Crypto.CryptoEncoding.BASE64
+          }
         );
-      });
-    },
-    []
-  );
+      }
 
-  const refreshObsPreview = useCallback(
-    async (sceneNameOverride?: string) => {
       const socket = obsSocketRef.current;
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-      const sceneName = (sceneNameOverride || obsActiveScene || '').trim();
-      if (!sceneName) {
-        setObsPreviewUri(null);
-        return;
-      }
-
-      try {
-        const previewResponse = await sendObsRequest('GetSourceScreenshot', {
-          sourceName: sceneName,
-          imageFormat: 'jpeg',
-          imageWidth: 640,
-          imageCompressionQuality: 65,
-        });
-        const imageData = typeof previewResponse.imageData === 'string' ? previewResponse.imageData : '';
-        if (imageData) {
-          setObsPreviewUri(imageData);
-        }
-      } catch {
-        // Some scenes/sources cannot provide screenshots; keep previous preview.
-      }
-    },
-    [obsActiveScene, sendObsRequest]
-  );
-
-  const refreshObsState = useCallback(
-    async (options?: { force?: boolean }) => {
-      const socket = obsSocketRef.current;
-      if (!socket || socket.readyState !== WebSocket.OPEN) {
-        if (!options?.force) return;
-        return;
-      }
-      if (obsRefreshInFlightRef.current) return;
-      obsRefreshInFlightRef.current = true;
-
-      try {
-        const [sceneListResult, streamStatusResult, recordStatusResult, statsResult] = await Promise.allSettled([
-          sendObsRequest('GetSceneList'),
-          sendObsRequest('GetStreamStatus'),
-          sendObsRequest('GetRecordStatus'),
-          sendObsRequest('GetStats'),
-        ]);
-
-        let currentSceneName = '';
-
-        if (sceneListResult.status === 'fulfilled') {
-          const sceneList = sceneListResult.value;
-          const scenesRaw = Array.isArray(sceneList.scenes) ? sceneList.scenes : [];
-          const sceneNames = scenesRaw
-            .map((item) => {
-              const record = asRecord(item);
-              return typeof record?.sceneName === 'string' ? record.sceneName : '';
-            })
-            .filter(Boolean);
-          setObsScenes(sceneNames);
-
-          currentSceneName =
-            typeof sceneList.currentProgramSceneName === 'string' ? sceneList.currentProgramSceneName : '';
-          setObsActiveScene(currentSceneName || null);
-          if (currentSceneName) {
-            void refreshObsPreview(currentSceneName);
-          } else {
-            setObsPreviewUri(null);
+      socket.send(
+        JSON.stringify({
+          op: 1,
+          d: {
+            rpcVersion,
+            authentication,
+            eventSubscriptions: 1023
           }
+        })
+      );
+      return;
+    }
+
+    if (payload.op === 2) {
+      setObsConnected(true);
+      setObsConnecting(false);
+      setObsStatusText("Connected");
+      void refreshObsState();
+      return;
+    }
+
+    if (payload.op === 5) {
+      const eventPayload = asRecord(payload.d);
+      const eventType = typeof eventPayload?.eventType === "string" ? eventPayload.eventType : "";
+      const eventData = asRecord(eventPayload?.eventData);
+
+      if (eventType === "CurrentProgramSceneChanged") {
+        const sceneName = typeof eventData?.sceneName === "string" ? eventData.sceneName : "";
+        if (sceneName) {
+          setObsCurrentScene(sceneName);
+          void refreshObsState();
         }
-
-        if (streamStatusResult.status === 'fulfilled') {
-          const streamStatus = streamStatusResult.value;
-          setObsStreaming(streamStatus.outputActive === true);
-          setObsStreamTimecode(readNumber(streamStatus.outputDuration));
-        }
-
-        if (recordStatusResult.status === 'fulfilled') {
-          const recordStatus = recordStatusResult.value;
-          setObsRecording(recordStatus.outputActive === true);
-          setObsRecordTimecode(readNumber(recordStatus.outputDuration));
-        }
-
-        if (statsResult.status === 'fulfilled') {
-          const statsResponse = statsResult.value;
-          setObsStats({
-            cpuUsage: readNumber(statsResponse.cpuUsage),
-            activeFps: readNumber(statsResponse.activeFps),
-            outputSkippedFrames: readNumber(statsResponse.outputSkippedFrames),
-            outputTotalFrames: readNumber(statsResponse.outputTotalFrames),
-          });
-        }
-
-        if (currentSceneName) {
-          try {
-            const sceneItemsResponse = await sendObsRequest('GetSceneItemList', {
-              sceneName: currentSceneName,
-            });
-            const sceneItemsRaw = Array.isArray(sceneItemsResponse.sceneItems) ? sceneItemsResponse.sceneItems : [];
-            const sceneItems: ObsSceneItem[] = sceneItemsRaw
-              .map((item) => {
-                const record = asRecord(item);
-                const id = readNumber(record?.sceneItemId);
-                const name = typeof record?.sourceName === 'string' ? record.sourceName : '';
-                const enabled = record?.sceneItemEnabled === true;
-                if (!id || !name) return null;
-                return {
-                  sceneItemId: id,
-                  sourceName: name,
-                  enabled,
-                } satisfies ObsSceneItem;
-              })
-              .filter(Boolean) as ObsSceneItem[];
-            setObsSceneItems(sceneItems);
-          } catch {
-            setObsSceneItems([]);
-          }
-        } else {
-          setObsSceneItems([]);
-        }
-
-        try {
-          const inputListResponse = await sendObsRequest('GetInputList');
-          const inputRows = Array.isArray(inputListResponse.inputs) ? inputListResponse.inputs : [];
-          const inputNames = inputRows
-            .map((item) => {
-              const row = asRecord(item);
-              return typeof row?.inputName === 'string' ? row.inputName : '';
-            })
-            .filter(Boolean);
-          const uniqueInputNames = Array.from(new Set(inputNames));
-
-          const audioStates = await Promise.all(
-            uniqueInputNames.map(async (inputName) => {
-              try {
-                const [muteResponse, volumeResponse] = await Promise.all([
-                  sendObsRequest('GetInputMute', { inputName }),
-                  sendObsRequest('GetInputVolume', { inputName }),
-                ]);
-                return {
-                  inputName,
-                  muted: muteResponse.inputMuted === true,
-                  volumeMul: clamp01(readNumber(volumeResponse.inputVolumeMul) ?? 1),
-                } satisfies ObsAudioInput;
-              } catch {
-                return null;
-              }
-            })
-          );
-          setObsAudioInputs(audioStates.filter(Boolean) as ObsAudioInput[]);
-        } catch {
-          setObsAudioInputs([]);
-        }
-
-        setObsStatusText('Connected');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setObsStatusText(message);
-        pushObsError(message);
-      } finally {
-        obsRefreshInFlightRef.current = false;
-      }
-    },
-    [asRecord, clamp01, pushObsError, readNumber, refreshObsPreview, sendObsRequest]
-  );
-
-  const handleObsMessage = useCallback(
-    async (raw: string) => {
-      let payload: unknown = null;
-      try {
-        payload = JSON.parse(raw);
-      } catch {
-        return;
-      }
-
-      const payloadRecord = asRecord(payload);
-      if (!payloadRecord) return;
-      if (typeof payloadRecord.op !== 'number') return;
-
-      if (payloadRecord.op === 0) {
-        const hello = asRecord(payloadRecord.d);
-        const rpcVersion = typeof hello?.rpcVersion === 'number' ? hello.rpcVersion : 1;
-        obsRpcVersionRef.current = rpcVersion;
-
-        let authentication: string | undefined;
-        const authBlock = asRecord(hello?.authentication);
-        const challenge = typeof authBlock?.challenge === 'string' ? authBlock.challenge : '';
-        const salt = typeof authBlock?.salt === 'string' ? authBlock.salt : '';
-        if (challenge && salt) {
-          const passwordForAuth = obsAuthPasswordRef.current.trim();
-          if (!passwordForAuth) {
-            throw new Error('OBS requires a password.');
-          }
-          const secret = await Crypto.digestStringAsync(
-            Crypto.CryptoDigestAlgorithm.SHA256,
-            `${passwordForAuth}${salt}`,
-            { encoding: Crypto.CryptoEncoding.BASE64 }
-          );
-          authentication = await Crypto.digestStringAsync(
-            Crypto.CryptoDigestAlgorithm.SHA256,
-            `${secret}${challenge}`,
-            { encoding: Crypto.CryptoEncoding.BASE64 }
-          );
-        }
-
-        const socket = obsSocketRef.current;
-        if (!socket || socket.readyState !== WebSocket.OPEN) return;
-        socket.send(
-          JSON.stringify({
-            op: 1,
-            d: {
-              rpcVersion,
-              authentication,
-              eventSubscriptions: 1023,
-            },
-          })
+      } else if (eventType === "StreamStateChanged") {
+        setObsStreamActive(eventData?.outputActive === true);
+      } else if (eventType === "RecordStateChanged") {
+        setObsRecordActive(eventData?.outputActive === true);
+      } else if (eventType === "SceneItemEnableStateChanged") {
+        const sceneItemId = readNumber(eventData?.sceneItemId);
+        const enabled = eventData?.sceneItemEnabled === true;
+        if (!sceneItemId) return;
+        setObsSceneItems((previous) =>
+          previous.map((item) => (item.sceneItemId === sceneItemId ? { ...item, enabled } : item))
         );
-        return;
-      }
-
-      if (payloadRecord.op === 2) {
-        setObsConnected(true);
-        setObsConnecting(false);
-        setObsStatusText('Connected');
-        void refreshObsState({ force: true });
-        return;
-      }
-
-      if (payloadRecord.op === 5) {
-        const eventPayload = asRecord(payloadRecord.d);
-        const eventType = typeof eventPayload?.eventType === 'string' ? eventPayload.eventType : '';
-        const eventData = asRecord(eventPayload?.eventData);
-
-        if (eventType === 'CurrentProgramSceneChanged') {
-          const sceneName = typeof eventData?.sceneName === 'string' ? eventData.sceneName : '';
-          if (sceneName) {
-            setObsActiveScene(sceneName);
-            void refreshObsState({ force: true });
-          }
-        } else if (eventType === 'StreamStateChanged') {
-          setObsStreaming(eventData?.outputActive === true);
-          setObsStreamTimecode(readNumber(eventData?.outputDuration));
-        } else if (eventType === 'RecordStateChanged') {
-          setObsRecording(eventData?.outputActive === true);
-          setObsRecordTimecode(readNumber(eventData?.outputDuration));
-        } else if (eventType === 'SceneItemEnableStateChanged') {
-          const sceneItemId = readNumber(eventData?.sceneItemId);
-          const enabled = eventData?.sceneItemEnabled === true;
-          if (!sceneItemId) return;
-          setObsSceneItems((previous) =>
-            previous.map((item) => (item.sceneItemId === sceneItemId ? { ...item, enabled } : item))
-          );
-        } else if (eventType === 'InputMuteStateChanged') {
-          const inputName = typeof eventData?.inputName === 'string' ? eventData.inputName : '';
-          const inputMuted = eventData?.inputMuted === true;
-          if (!inputName) return;
-          setObsAudioInputs((previous) =>
-            previous.map((item) => (item.inputName === inputName ? { ...item, muted: inputMuted } : item))
-          );
-        } else if (eventType === 'InputVolumeChanged') {
-          const inputName = typeof eventData?.inputName === 'string' ? eventData.inputName : '';
-          const inputVolumeMul = clamp01(readNumber(eventData?.inputVolumeMul) ?? 1);
-          if (!inputName) return;
-          setObsAudioInputs((previous) =>
-            previous.map((item) => (item.inputName === inputName ? { ...item, volumeMul: inputVolumeMul } : item))
-          );
-        } else if (
-          eventType === 'SceneCreated' ||
-          eventType === 'SceneRemoved' ||
-          eventType === 'SceneNameChanged' ||
-          eventType === 'SceneItemCreated' ||
-          eventType === 'SceneItemRemoved' ||
-          eventType === 'InputCreated' ||
-          eventType === 'InputRemoved'
-        ) {
-          void refreshObsState({ force: true });
-        }
-        return;
-      }
-
-      if (payloadRecord.op === 7) {
-        const responsePayload = asRecord(payloadRecord.d);
-        if (!responsePayload) return;
-        const requestId = typeof responsePayload.requestId === 'string' ? responsePayload.requestId : '';
-        if (!requestId) return;
-
-        const pending = obsPendingRequestsRef.current.get(requestId);
-        if (!pending) return;
-        obsPendingRequestsRef.current.delete(requestId);
-        clearTimeout(pending.timeoutId);
-
-        const requestStatus = asRecord(responsePayload.requestStatus);
-        const ok = requestStatus?.result === true;
-        if (!ok) {
-          const comment =
-            typeof requestStatus?.comment === 'string' && requestStatus.comment
-              ? requestStatus.comment
-              : 'OBS request failed.';
-          pending.reject(new Error(comment));
-          return;
-        }
-
-        const responseData = asRecord(responsePayload.responseData) ?? {};
-        pending.resolve(responseData);
-      }
-    },
-    [clamp01, readNumber, refreshObsState]
-  );
-
-  const connectObsWithValues = useCallback(
-    (hostRaw: string, portRaw: string, passwordRaw: string) => {
-      if (obsConnecting || obsConnected) return;
-
-      const host = hostRaw.trim();
-      const port = portRaw.trim();
-      if (!host || !port) {
-        const message = 'OBS host and port are required.';
-        setObsStatusText(message);
-        pushObsError(message);
-        return;
-      }
-
-      obsAuthPasswordRef.current = passwordRaw.trim();
-      setObsConnecting(true);
-      setObsStatusText('Connecting...');
-
-      try {
-        const socket = new WebSocket(`ws://${host}:${port}`);
-        obsSocketRef.current = socket;
-
-        socket.onopen = () => {
-          setObsStatusText('Socket connected. Waiting for OBS handshake...');
-        };
-
-        socket.onmessage = (event) => {
-          void handleObsMessage(String(event.data)).catch((error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            setObsStatusText(message);
-            pushObsError(message);
-            disconnectObs('OBS authentication failed.');
-          });
-        };
-
-        socket.onerror = () => {
-          setObsStatusText('OBS socket error.');
-        };
-
-        socket.onclose = () => {
-          rejectAllObsPending('OBS connection closed.');
-          setObsConnected(false);
-          setObsConnecting(false);
-          setObsStatusText('Disconnected');
-        };
-      } catch (error) {
-        setObsConnecting(false);
-        setObsConnected(false);
-        const message = error instanceof Error ? error.message : String(error);
-        setObsStatusText(message);
-        pushObsError(message);
-      }
-    },
-    [disconnectObs, handleObsMessage, obsConnected, obsConnecting, pushObsError, rejectAllObsPending]
-  );
-
-  const connectObs = useCallback(() => {
-    connectObsWithValues(obsHost, obsPort, obsPassword);
-  }, [connectObsWithValues, obsHost, obsPassword, obsPort]);
-
-  const upsertObsSavedConnection = useCallback(
-    (connection: ParsedObsConnection, editingId?: string | null) => {
-      const host = connection.host.trim();
-      const port = connection.port.trim();
-      if (!host || !port) return;
-
-      const password = connection.password?.trim() || '';
-      const nickname = connection.nickname?.trim() || host;
-      const normalizedHost = host.toLowerCase();
-
-      setObsSavedConnections((previous) => {
-        const endpointMatch = previous.find(
-          (candidate) => candidate.host.toLowerCase() === normalizedHost && candidate.port === port
+      } else if (eventType === "InputMuteStateChanged") {
+        const inputName = typeof eventData?.inputName === "string" ? eventData.inputName : "";
+        const inputMuted = eventData?.inputMuted === true;
+        if (!inputName) return;
+        setObsAudioInputs((previous) =>
+          previous.map((item) => (item.inputName === inputName ? { ...item, muted: inputMuted } : item))
         );
-        const targetId = editingId || endpointMatch?.id || makeId();
-        const nextConnection: ObsSavedConnection = {
-          id: targetId,
-          nickname,
-          name: nickname,
-          host,
-          port,
-          password: password || undefined,
-        };
-        const deduped = previous.filter(
-          (candidate) =>
-            candidate.id !== targetId &&
-            !(candidate.host.toLowerCase() === normalizedHost && candidate.port === port)
+      } else if (eventType === "InputVolumeChanged") {
+        const inputName = typeof eventData?.inputName === "string" ? eventData.inputName : "";
+        const inputVolumeMul = clamp01(readNumber(eventData?.inputVolumeMul) ?? 1);
+        if (!inputName) return;
+        setObsAudioInputs((previous) =>
+          previous.map((item) => (item.inputName === inputName ? { ...item, volumeMul: inputVolumeMul } : item))
         );
-        return [nextConnection, ...deduped];
-      });
+      }
+      return;
+    }
 
-      setObsHost(host);
-      setObsPort(port);
-      setObsPassword(password);
-      setObsSavedName(nickname);
-      setObsEditingConnectionId(null);
-    },
-    []
-  );
+    if (payload.op === 7) {
+      const responsePayload = asRecord(payload.d);
+      if (!responsePayload) return;
+      const requestId = typeof responsePayload?.requestId === "string" ? responsePayload.requestId : "";
+      if (!requestId) return;
 
-  const handleSaveCurrentObsConnection = useCallback(() => {
+      const pending = obsPendingRef.current.get(requestId);
+      if (!pending) return;
+      obsPendingRef.current.delete(requestId);
+      clearTimeout(pending.timeoutId);
+
+      const requestStatus = asRecord(responsePayload.requestStatus);
+      const ok = requestStatus?.result === true;
+      if (!ok) {
+        const comment =
+          typeof requestStatus?.comment === "string" && requestStatus.comment
+            ? requestStatus.comment
+            : "OBS request failed.";
+        pending.reject(new Error(comment));
+        return;
+      }
+
+      const responseData = asRecord(responsePayload.responseData) ?? {};
+      pending.resolve(responseData);
+    }
+  };
+
+  const connectObs = () => {
+    if (obsConnecting || obsConnected) return;
+
     const host = obsHost.trim();
     const port = obsPort.trim();
     if (!host || !port) {
-      pushObsError('Host and port are required before saving.');
-      return;
-    }
-    upsertObsSavedConnection(
-      {
-        host,
-        port,
-        password: obsPassword.trim() || undefined,
-        nickname: obsSavedName.trim() || host,
-      },
-      obsEditingConnectionId
-    );
-  }, [obsEditingConnectionId, obsHost, obsPassword, obsPort, obsSavedName, pushObsError, upsertObsSavedConnection]);
-
-  const handleEditSavedObsConnection = useCallback(
-    (connectionId: string) => {
-      const connection = obsSavedConnections.find((candidate) => candidate.id === connectionId);
-      if (!connection) return;
-      setObsEditingConnectionId(connection.id);
-      setObsSavedName(getObsConnectionNickname(connection));
-      setObsHost(connection.host);
-      setObsPort(connection.port);
-      setObsPassword(connection.password ?? '');
-    },
-    [obsSavedConnections]
-  );
-
-  const handleConnectSavedObsConnection = useCallback(
-    (connectionId: string) => {
-      const connection = obsSavedConnections.find((candidate) => candidate.id === connectionId);
-      if (!connection) return;
-
-      const password = connection.password ?? '';
-      setObsEditingConnectionId(connection.id);
-      setObsSavedName(getObsConnectionNickname(connection));
-      setObsHost(connection.host);
-      setObsPort(connection.port);
-      setObsPassword(password);
-
-      if (obsConnected || obsConnecting) {
-        disconnectObs('Switching OBS connection...');
-        setTimeout(() => {
-          connectObsWithValues(connection.host, connection.port, password);
-        }, 180);
-        return;
-      }
-
-      connectObsWithValues(connection.host, connection.port, password);
-    },
-    [connectObsWithValues, disconnectObs, obsConnected, obsConnecting, obsSavedConnections]
-  );
-
-  const handleOpenObsQrScanner = useCallback(async () => {
-    if (cameraPermission?.granted) {
-      setQrScanLocked(false);
-      setShowQrScanner(true);
+      showNotice("OBS host and port are required.");
       return;
     }
 
-    const result = await requestCameraPermission();
-    if (result.granted) {
-      setQrScanLocked(false);
-      setShowQrScanner(true);
-      return;
-    }
+    setObsConnecting(true);
+    setObsStatusText("Connecting...");
 
-    pushObsError('Camera permission is required to scan OBS QR codes.');
-  }, [cameraPermission?.granted, pushObsError, requestCameraPermission]);
+    try {
+      const socket = new WebSocket(`ws://${host}:${port}`);
+      obsSocketRef.current = socket;
 
-  const handleObsQrScanned = useCallback(
-    (event: { data?: string }) => {
-      if (qrScanLocked) return;
-      const payload = typeof event?.data === 'string' ? event.data.trim() : '';
-      if (!payload) return;
-
-      setQrScanLocked(true);
-      const parsed = parseObsConnectionFromQr(payload);
-      if (!parsed) {
-        pushObsError('Could not parse OBS QR code. Expected obsws://host:port format.');
-        setTimeout(() => setQrScanLocked(false), 800);
-        return;
-      }
-
-      upsertObsSavedConnection(parsed);
-      setShowQrScanner(false);
-      setQrScanLocked(false);
-    },
-    [pushObsError, qrScanLocked, upsertObsSavedConnection]
-  );
-
-  const probeObsReachability = useCallback((hostRaw: string, portRaw: string): Promise<ObsReachability> => {
-    return new Promise((resolve) => {
-      const host = hostRaw.trim();
-      const port = portRaw.trim();
-      if (!host || !port) {
-        resolve('offline');
-        return;
-      }
-
-      let socket: WebSocket | null = null;
-      let settled = false;
-      const finish = (status: ObsReachability) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutId);
-        if (socket) {
-          try {
-            socket.close();
-          } catch {
-            // No-op
-          }
-        }
-        resolve(status);
+      socket.onopen = () => {
+        setObsStatusText("Socket connected. Waiting for OBS handshake...");
       };
 
-      const timeoutId = setTimeout(() => finish('offline'), 2500);
-
-      try {
-        socket = new WebSocket(`ws://${host}:${port}`);
-        socket.onopen = () => finish('reachable');
-        socket.onerror = () => finish('offline');
-        socket.onclose = () => finish('offline');
-      } catch {
-        finish('offline');
-      }
-    });
-  }, []);
-
-  const refreshObsReachability = useCallback(
-    (connections: ObsSavedConnection[]) => {
-      for (const connection of connections) {
-        setObsReachabilityMap((previous) => {
-          const next = new Map(previous);
-          next.set(connection.id, 'checking');
-          return next;
+      socket.onmessage = (event) => {
+        void handleObsMessage(String(event.data)).catch((error) => {
+          setObsStatusText(error instanceof Error ? error.message : String(error));
+          showNotice(error instanceof Error ? error.message : String(error));
+          disconnectObs("OBS authentication failed.");
         });
+      };
 
-        void probeObsReachability(connection.host, connection.port).then((status) => {
-          setObsReachabilityMap((previous) => {
-            const next = new Map(previous);
-            next.set(connection.id, status);
-            return next;
-          });
-        });
-      }
-    },
-    [probeObsReachability]
-  );
+      socket.onerror = () => {
+        setObsStatusText("OBS socket error.");
+      };
 
-  useEffect(() => {
-    if (obsSavedConnections.length === 0) {
-      setObsReachabilityMap(new Map());
-      return;
+      socket.onclose = () => {
+        const wasConnected = obsConnected;
+        rejectAllObsPending("OBS connection closed.");
+        setObsConnected(false);
+        setObsConnecting(false);
+        if (!wasConnected) {
+          setObsStatusText("Could not connect to OBS.");
+        } else {
+          setObsStatusText("Disconnected");
+        }
+      };
+    } catch (error) {
+      setObsConnecting(false);
+      setObsConnected(false);
+      setObsStatusText(error instanceof Error ? error.message : String(error));
     }
-    refreshObsReachability(obsSavedConnections);
-  }, [obsSavedConnections, refreshObsReachability]);
+  };
 
-  useEffect(() => {
-    if (mobileSection !== 'obs' || obsSavedConnections.length === 0) return;
-    const intervalId = setInterval(() => {
-      refreshObsReachability(obsSavedConnections);
-    }, 45000);
-    return () => clearInterval(intervalId);
-  }, [mobileSection, obsSavedConnections, refreshObsReachability]);
-
-  const switchObsScene = useCallback(
-    async (sceneName: string) => {
-      if (!sceneName) return;
-      try {
-        await sendObsRequest('SetCurrentProgramScene', { sceneName });
-        setObsActiveScene(sceneName);
-        await refreshObsState({ force: true });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setObsStatusText(message);
-        pushObsError(message);
-      }
-    },
-    [pushObsError, refreshObsState, sendObsRequest]
-  );
-
-  const toggleObsStream = useCallback(async () => {
+  const switchObsScene = async (sceneName: string) => {
+    if (!sceneName) return;
     try {
-      await sendObsRequest(obsStreaming ? 'StopStream' : 'StartStream');
+      await sendObsRequest("SetCurrentProgramScene", {
+        sceneName
+      });
+      setObsCurrentScene(sceneName);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  const toggleObsStream = async () => {
+    try {
+      await sendObsRequest(obsStreamActive ? "StopStream" : "StartStream");
       await refreshObsState();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setObsStatusText(message);
-      pushObsError(message);
+      showNotice(error instanceof Error ? error.message : String(error));
     }
-  }, [obsStreaming, pushObsError, refreshObsState, sendObsRequest]);
+  };
 
-  const toggleObsRecord = useCallback(async () => {
+  const toggleObsRecord = async () => {
     try {
-      await sendObsRequest(obsRecording ? 'StopRecord' : 'StartRecord');
+      await sendObsRequest(obsRecordActive ? "StopRecord" : "StartRecord");
       await refreshObsState();
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setObsStatusText(message);
-      pushObsError(message);
+      showNotice(error instanceof Error ? error.message : String(error));
     }
-  }, [obsRecording, pushObsError, refreshObsState, sendObsRequest]);
+  };
 
-  const toggleObsSceneItem = useCallback(
-    async (sceneItem: ObsSceneItem) => {
-      if (!obsActiveScene) return;
-      try {
-        await sendObsRequest('SetSceneItemEnabled', {
-          sceneName: obsActiveScene,
-          sceneItemId: sceneItem.sceneItemId,
-          sceneItemEnabled: !sceneItem.enabled,
-        });
-        setObsSceneItems((previous) =>
-          previous.map((item) =>
-            item.sceneItemId === sceneItem.sceneItemId ? { ...item, enabled: !sceneItem.enabled } : item
-          )
-        );
-        void refreshObsPreview();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setObsStatusText(message);
-        pushObsError(message);
-      }
-    },
-    [obsActiveScene, pushObsError, refreshObsPreview, sendObsRequest]
-  );
+  const toggleObsSceneItem = async (sceneItem: ObsSceneItem) => {
+    if (!obsCurrentScene) return;
+    try {
+      await sendObsRequest("SetSceneItemEnabled", {
+        sceneName: obsCurrentScene,
+        sceneItemId: sceneItem.sceneItemId,
+        sceneItemEnabled: !sceneItem.enabled
+      });
+      setObsSceneItems((previous) =>
+        previous.map((item) =>
+          item.sceneItemId === sceneItem.sceneItemId ? { ...item, enabled: !sceneItem.enabled } : item
+        )
+      );
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
 
-  const toggleObsInputMute = useCallback(
-    async (input: ObsAudioInput) => {
-      try {
-        await sendObsRequest('SetInputMute', {
-          inputName: input.inputName,
-          inputMuted: !input.muted,
-        });
-        setObsAudioInputs((previous) =>
-          previous.map((item) => (item.inputName === input.inputName ? { ...item, muted: !input.muted } : item))
-        );
-        void refreshObsPreview();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setObsStatusText(message);
-        pushObsError(message);
-      }
-    },
-    [pushObsError, refreshObsPreview, sendObsRequest]
-  );
+  const toggleObsInputMute = async (input: ObsAudioInput) => {
+    try {
+      await sendObsRequest("SetInputMute", {
+        inputName: input.inputName,
+        inputMuted: !input.muted
+      });
+      setObsAudioInputs((previous) =>
+        previous.map((item) => (item.inputName === input.inputName ? { ...item, muted: !input.muted } : item))
+      );
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
 
-  const adjustObsInputVolume = useCallback(
-    async (input: ObsAudioInput, delta: number) => {
-      try {
-        const nextVolume = clamp01(input.volumeMul + delta);
-        await sendObsRequest('SetInputVolume', {
-          inputName: input.inputName,
-          inputVolumeMul: nextVolume,
-        });
-        setObsAudioInputs((previous) =>
-          previous.map((item) => (item.inputName === input.inputName ? { ...item, volumeMul: nextVolume } : item))
-        );
-        void refreshObsPreview();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setObsStatusText(message);
-        pushObsError(message);
-      }
-    },
-    [clamp01, pushObsError, refreshObsPreview, sendObsRequest]
-  );
-
-  const setObsInputVolume = useCallback(
-    async (input: ObsAudioInput, nextVolumeRaw: number) => {
-      const nextVolume = clamp01(nextVolumeRaw);
+  const adjustObsInputVolume = async (input: ObsAudioInput, delta: number) => {
+    try {
+      const nextVolume = clamp01(input.volumeMul + delta);
+      await sendObsRequest("SetInputVolume", {
+        inputName: input.inputName,
+        inputVolumeMul: nextVolume
+      });
       setObsAudioInputs((previous) =>
         previous.map((item) => (item.inputName === input.inputName ? { ...item, volumeMul: nextVolume } : item))
       );
-      try {
-        await sendObsRequest('SetInputVolume', {
-          inputName: input.inputName,
-          inputVolumeMul: nextVolume,
-        });
-        void refreshObsPreview();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setObsStatusText(message);
-        pushObsError(message);
-      }
-    },
-    [clamp01, pushObsError, refreshObsPreview, sendObsRequest]
-  );
-
-  useEffect(() => {
-    if (!obsConnected || mobileSection !== 'obs') return;
-    void refreshObsState({ force: true });
-  }, [mobileSection, obsConnected, refreshObsState]);
+    } catch (error) {
+      showNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
 
   useEffect(() => {
     return () => {
-      disconnectObs('App closed.');
+      for (const adapter of adaptersRef.current.values()) {
+        void adapter.disconnect();
+      }
+      adaptersRef.current.clear();
+
+      const socket = obsSocketRef.current;
+      obsSocketRef.current = null;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      }
+      rejectAllObsPending("App closed.");
+
+      if (noticeTimerRef.current) {
+        clearTimeout(noticeTimerRef.current);
+      }
     };
-  }, [disconnectObs]);
-  
-  // ============================================================================
-  // Authentication Handlers
-  // ============================================================================
-
-  const pushAuthError = useCallback((platform: PlatformId, message: string) => {
-    setErrors((prev) => [
-      ...prev.slice(-4),
-      {
-        id: makeId(),
-        type: 'authentication',
-        message: `${PLATFORM_NAMES[platform]} sign-in failed: ${message}`,
-        platform,
-        retryable: false,
-        timestamp: new Date(),
-      },
-    ]);
   }, []);
-  
-  const handleConnectTwitch = useCallback(async () => {
-    try {
-      if (!TWITCH_CLIENT_ID.trim()) {
-        pushAuthError('twitch', 'Client ID is missing in this build.');
-        return;
-      }
 
-      const state = randomToken();
-      const authUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${TWITCH_CLIENT_ID}&redirect_uri=${encodeURIComponent(TWITCH_REDIRECT_URI)}&response_type=token&scope=${encodeURIComponent(TWITCH_SCOPES.join(' '))}&state=${state}`;
-      
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, TWITCH_REDIRECT_URI);
-      if (result.type !== 'success' || !result.url) {
-        if (result.type !== 'cancel' && result.type !== 'dismiss') {
-          pushAuthError('twitch', `Session did not complete (${result.type}).`);
-        }
-        return;
-      }
-
-      const params = parseAuthParamsFromCallbackUrl(result.url);
-      const returnedState = params.get('state');
-      if (returnedState && returnedState !== state) {
-        pushAuthError('twitch', 'State validation failed. Please try again.');
-        return;
-      }
-
-      const providerError = params.get('error_description') || params.get('error');
-      if (providerError) {
-        pushAuthError('twitch', providerError);
-        return;
-      }
-
-      const token = params.get('access_token');
-      if (!token) {
-        pushAuthError('twitch', 'Missing access token in callback response.');
-        return;
-      }
-
-      const response = await fetch('https://api.twitch.tv/helix/users', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Client-Id': TWITCH_CLIENT_ID,
-        },
-      });
-      const rawBody = await response.text();
-      if (!response.ok) {
-        pushAuthError('twitch', summarizeHttpError(response.status, rawBody, 'Profile lookup failed'));
-        return;
-      }
-
-      const data = JSON.parse(rawBody) as { data?: Array<{ login?: string }> };
-      const username = typeof data.data?.[0]?.login === 'string' ? data.data[0].login : '';
-      if (!username.trim()) {
-        pushAuthError('twitch', 'Signed in, but username lookup returned empty.');
-        return;
-      }
-
-      setTwitchToken(token);
-      setTwitchUsername(username.trim());
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      pushAuthError('twitch', message);
+  useEffect(() => {
+    if (!activeChatTab) {
+      setSendTargetId(OBS_ALL_SEND_TARGET);
+      return;
     }
-  }, [pushAuthError]);
-  
-  const handleConnectKick = useCallback(async () => {
-    try {
-      if (!KICK_CLIENT_ID.trim() || !KICK_CLIENT_SECRET.trim()) {
-        pushAuthError('kick', 'Client ID or secret is missing in this build.');
-        return;
-      }
 
-      const state = randomToken();
-      const verifier = randomToken();
-      const verifierHash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier, {
-        encoding: Crypto.CryptoEncoding.BASE64,
-      });
-      const codeChallenge = toBase64Url(verifierHash);
-      
-      const authUrl = `https://id.kick.com/oauth/authorize?client_id=${KICK_CLIENT_ID}&redirect_uri=${encodeURIComponent(KICK_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(KICK_SCOPES.join(' '))}&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
-      
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, KICK_REDIRECT_URI);
-      if (result.type !== 'success' || !result.url) {
-        if (result.type !== 'cancel' && result.type !== 'dismiss') {
-          pushAuthError('kick', `Session did not complete (${result.type}).`);
-        }
-        return;
-      }
-
-      const params = parseAuthParamsFromCallbackUrl(result.url);
-      const providerError = params.get('error_description') || params.get('error');
-      if (providerError) {
-        pushAuthError('kick', providerError);
-        return;
-      }
-
-      const returnedState = params.get('state');
-      if (returnedState && returnedState !== state) {
-        pushAuthError('kick', 'State validation failed. Please try again.');
-        return;
-      }
-
-      const code = params.get('code');
-      if (!code) {
-        pushAuthError('kick', 'Missing authorization code in callback response.');
-        return;
-      }
-
-      const tokenResponse = await fetch('https://id.kick.com/oauth/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: KICK_CLIENT_ID,
-          client_secret: KICK_CLIENT_SECRET,
-          redirect_uri: KICK_REDIRECT_URI,
-          code_verifier: verifier,
-          code,
-        }).toString(),
-      });
-      const tokenRaw = await tokenResponse.text();
-      if (!tokenResponse.ok) {
-        pushAuthError('kick', summarizeHttpError(tokenResponse.status, tokenRaw, 'Token exchange failed'));
-        return;
-      }
-
-      const tokenData = JSON.parse(tokenRaw) as { access_token?: string; refresh_token?: string };
-      const accessToken = typeof tokenData.access_token === 'string' ? tokenData.access_token.trim() : '';
-      if (!accessToken) {
-        pushAuthError('kick', 'Token exchange succeeded but no access token was returned.');
-        return;
-      }
-
-      setKickToken(accessToken);
-      setKickRefreshToken(typeof tokenData.refresh_token === 'string' ? tokenData.refresh_token : '');
-
-      // Best effort username lookup; token is still valid for auth even if profile endpoint fails.
-      let resolvedUsername = '';
-      try {
-        const userInfoResponse = await fetch('https://id.kick.com/oauth/userinfo', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (userInfoResponse.ok) {
-          const raw = await userInfoResponse.text();
-          const payload = asRecord(JSON.parse(raw));
-          const preferred = payload && typeof payload.preferred_username === 'string'
-            ? payload.preferred_username.trim()
-            : '';
-          if (preferred) {
-            resolvedUsername = preferred;
-          }
-        }
-      } catch {
-        // Ignore and fall back to public profile endpoint.
-      }
-
-      if (!resolvedUsername) {
-        try {
-          const userResponse = await fetch('https://api.kick.com/public/v1/users', {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          if (userResponse.ok) {
-            const raw = await userResponse.text();
-            const payload = asRecord(JSON.parse(raw));
-            const rows = payload && Array.isArray(payload.data) ? payload.data : [];
-            const first = asRecord(rows[0]);
-            const username = first && typeof first.username === 'string' ? first.username.trim() : '';
-            if (username) {
-              resolvedUsername = username;
-            }
-          }
-        } catch {
-          // No-op.
-        }
-      }
-
-      if (resolvedUsername) {
-        setKickUsername(resolvedUsername);
-      }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      pushAuthError('kick', message);
+    if (writableActiveSources.length === 1) {
+      setSendTargetId(writableActiveSources[0].id);
+      return;
     }
-  }, [pushAuthError]);
-  
-  const handleConnectYouTube = useCallback(async () => {
-    try {
-      if (!YOUTUBE_CLIENT_ID.trim()) {
-        pushAuthError('youtube', 'Client ID is missing in this build.');
-        return;
-      }
 
-      const state = randomToken();
-      const verifier = randomToken();
-      const verifierHash = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier, {
-        encoding: Crypto.CryptoEncoding.BASE64,
-      });
-      const codeChallenge = toBase64Url(verifierHash);
-      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${YOUTUBE_CLIENT_ID}&redirect_uri=${encodeURIComponent(YOUTUBE_REDIRECT_URI)}&response_type=code&scope=${encodeURIComponent(YOUTUBE_SCOPES.join(' '))}&access_type=offline&prompt=consent&include_granted_scopes=true&state=${state}&code_challenge=${codeChallenge}&code_challenge_method=S256`;
-      
-      const result = await WebBrowser.openAuthSessionAsync(authUrl, YOUTUBE_REDIRECT_URI);
-      if (result.type !== 'success' || !result.url) {
-        if (result.type !== 'cancel' && result.type !== 'dismiss') {
-          pushAuthError('youtube', `Session did not complete (${result.type}).`);
-        }
-        return;
-      }
-
-      const params = parseAuthParamsFromCallbackUrl(result.url);
-      const providerError = params.get('error_description') || params.get('error');
-      if (providerError) {
-        pushAuthError('youtube', providerError);
-        return;
-      }
-
-      const returnedState = params.get('state');
-      if (returnedState && returnedState !== state) {
-        pushAuthError('youtube', 'State validation failed. Please try again.');
-        return;
-      }
-
-      const code = params.get('code');
-      if (!code) {
-        pushAuthError('youtube', 'Missing authorization code in callback response.');
-        return;
-      }
-
-      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: YOUTUBE_CLIENT_ID,
-          redirect_uri: YOUTUBE_REDIRECT_URI,
-          code_verifier: verifier,
-          code,
-        }).toString(),
-      });
-      const tokenRaw = await tokenResponse.text();
-      if (!tokenResponse.ok) {
-        pushAuthError('youtube', summarizeHttpError(tokenResponse.status, tokenRaw, 'Token exchange failed'));
-        return;
-      }
-
-      const tokenData = JSON.parse(tokenRaw) as {
-        access_token?: string;
-        refresh_token?: string;
-        expires_in?: number;
-      };
-      const accessToken = typeof tokenData.access_token === 'string' ? tokenData.access_token.trim() : '';
-      if (!accessToken) {
-        pushAuthError('youtube', 'Token exchange succeeded but no access token was returned.');
-        return;
-      }
-
-      setYoutubeAccessToken(accessToken);
-      setYoutubeRefreshToken(
-        typeof tokenData.refresh_token === 'string' && tokenData.refresh_token.trim()
-          ? tokenData.refresh_token
-          : youtubeRefreshToken
-      );
-      setYoutubeTokenExpiry(Date.now() + (tokenData.expires_in ?? 3600) * 1000);
-
-      // Best effort: resolve YouTube channel display name.
-      try {
-        const userResponse = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        if (userResponse.ok) {
-          const raw = await userResponse.text();
-          const userData = JSON.parse(raw) as { items?: Array<{ snippet?: { title?: string } }> };
-          const username = typeof userData.items?.[0]?.snippet?.title === 'string'
-            ? userData.items[0].snippet.title.trim()
-            : '';
-          if (username) {
-            setYoutubeUsername(username);
-          }
-        }
-      } catch {
-        // Non-fatal for sign-in.
-      }
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      pushAuthError('youtube', message);
+    if (writableActiveSources.some((source) => source.id === sendTargetId)) {
+      return;
     }
-  }, [pushAuthError, youtubeRefreshToken]);
-  
-  const handleDisconnectTwitch = useCallback(() => {
-    setTwitchToken('');
-    setTwitchUsername('');
-  }, []);
-  
-  const handleDisconnectKick = useCallback(() => {
-    setKickToken('');
-    setKickRefreshToken('');
-    setKickUsername('');
-  }, []);
-  
-  const handleDisconnectYouTube = useCallback(() => {
-    setYoutubeAccessToken('');
-    setYoutubeRefreshToken('');
-    setYoutubeTokenExpiry(0);
-    setYoutubeUsername('');
-  }, []);
-  
-  // ============================================================================
-  // Onboarding Handlers (P0 Recommendation #1)
-  // ============================================================================
-  
-  const handleOnboardingComplete = useCallback((platform: PlatformId, channel: string) => {
-    addChannel(platform, channel);
-    setHasCompletedOnboarding(true);
-  }, [addChannel]);
-  
-  const handleOnboardingSkip = useCallback(() => {
-    setHasCompletedOnboarding(true);
-  }, []);
-  
-  const handleResetOnboarding = useCallback(() => {
-    setHasCompletedOnboarding(false);
-  }, []);
-  
-  // ============================================================================
-  // Render
-  // ============================================================================
-  
-  // Show loading screen while initializing (P0 Recommendation #4)
-  if (isLoading) {
+
+    setSendTargetId(OBS_ALL_SEND_TARGET);
+  }, [activeChatTab, sendTargetId, writableActiveSources]);
+
+  const sendTargets = useMemo(() => {
+    if (!activeChatTab) return [];
+    const targets: Array<{ id: ObsSendTarget; label: string }> = [];
+    if (writableActiveSources.length > 1) {
+      targets.push({
+        id: OBS_ALL_SEND_TARGET,
+        label: `All writable (${writableActiveSources.length})`
+      });
+    }
+    for (const source of writableActiveSources) {
+      targets.push({
+        id: source.id,
+        label: `${source.platform}/${source.channel}`
+      });
+    }
+    return targets;
+  }, [activeChatTab, writableActiveSources]);
+
+  const renderChatTabBody = () => {
+    if (!activeChatTab) return null;
+
+    const activeSourceStatusSummary =
+      activeChatSources.length === 1
+        ? `${activeChatSources[0].platform}/${activeChatSources[0].channel} - ${statusLabel(
+            statusBySource[activeChatSources[0].id]
+          )}`
+        : `${activeChatSources.length} chats combined`;
+
     return (
-      <SafeAreaProvider>
-        <FullScreenLoading message="Loading MultiChat..." />
-        <StatusBar style="light" />
-      </SafeAreaProvider>
-    );
-  }
-  
-  // Show onboarding for first-time users (P0 Recommendation #1)
-  if (!hasCompletedOnboarding) {
-    return (
-      <SafeAreaProvider>
-        <SafeAreaView style={styles.container}>
-          <OnboardingWizard
-            onComplete={handleOnboardingComplete}
-            onSkip={handleOnboardingSkip}
-          />
-        </SafeAreaView>
-        <StatusBar style="light" />
-      </SafeAreaProvider>
-    );
-  }
-  
-  return (
-    <SafeAreaProvider>
-      <SafeAreaView style={styles.container}>
-        {/* Error banner (P0 Recommendation #3) */}
-        {errors.length > 0 && (
-          <View style={styles.errorContainer}>
-            {errors.slice(-1).map((error) => (
-              <ErrorBanner
-                key={error.id}
-                error={error}
-                onDismiss={() => removeError(error.id)}
-                onRetry={error.retryable ? error.retryAction : undefined}
-              />
-            ))}
-          </View>
-        )}
-        
-        {/* Connection status bar (P1 Recommendation #7) */}
-        {connectionStatusArray.length > 0 && mobileSection === 'chats' && (
-          <ConnectionStatusBar connections={connectionStatusArray} />
-        )}
-        
-        {/* Main content */}
-        <View style={styles.content}>
-          {mobileSection === 'chats' && (
-            <ChatsSection
-              sources={sources}
-              tabs={tabs}
-              activeTabId={activeTabId}
-              onSelectTab={setActiveTabId}
-              onCloseTab={closeTab}
-              messages={activeMessages}
-              isLoading={!isInitialized}
-              emoteMap={combinedEmoteMap}
-              badgeMap={globalBadgeMap}
-              filter={messageFilters}
-              onAddChannel={() => setMobileSection('add')}
-              onClearFilters={() => setMessageFilters(defaultMessageFilter)}
-              connectionStatuses={connectionStatuses}
-              onOpenSearch={() => setIsSearchOpen(true)}
-              onOpenFilters={() => setShowFilterModal(true)}
-            />
-          )}
-          
-          {mobileSection === 'add' && (
-            <AddChannelSection
-              platformInput={platformInput}
-              setPlatformInput={setPlatformInput}
-              channelInput={channelInput}
-              setChannelInput={setChannelInput}
-              onAddChannel={() => addChannel(platformInput, channelInput)}
-              sources={sources}
-              onRemoveChannel={removeChannel}
-              mergeSourceIds={mergeSourceIds}
-              onToggleMergeSource={toggleMergeSource}
-              onCombineSources={combineSelectedSources}
-            />
-          )}
-          
-          {mobileSection === 'obs' && (
-            <ObsSection
-              obsConnected={obsConnected}
-              obsConnecting={obsConnecting}
-              obsStatusText={obsStatusText}
-              obsHost={obsHost}
-              setObsHost={setObsHost}
-              obsPort={obsPort}
-              setObsPort={setObsPort}
-              obsPassword={obsPassword}
-              setObsPassword={setObsPassword}
-              obsSavedName={obsSavedName}
-              setObsSavedName={setObsSavedName}
-              obsEditingConnectionId={obsEditingConnectionId}
-              obsSavedConnections={obsSavedConnections}
-              obsReachabilityMap={obsReachabilityMap}
-              obsScenes={obsScenes}
-              obsActiveScene={obsActiveScene}
-              obsPreviewUri={obsPreviewUri}
-              obsSceneItems={obsSceneItems}
-              obsAudioInputs={obsAudioInputs}
-              obsStats={obsStats}
-              obsStreaming={obsStreaming}
-              obsRecording={obsRecording}
-              obsStreamTimecode={obsStreamTimecode}
-              obsRecordTimecode={obsRecordTimecode}
-              onConnect={connectObs}
-              onConnectSavedConnection={handleConnectSavedObsConnection}
-              onEditSavedConnection={handleEditSavedObsConnection}
-              onSaveCurrentConnection={handleSaveCurrentObsConnection}
-              onOpenQrScanner={handleOpenObsQrScanner}
-              onDisconnect={disconnectObs}
-              onRefresh={refreshObsState}
-              onSwitchScene={switchObsScene}
-              onToggleStream={toggleObsStream}
-              onToggleRecord={toggleObsRecord}
-              onToggleSceneItem={toggleObsSceneItem}
-              onToggleInputMute={toggleObsInputMute}
-              onAdjustInputVolume={adjustObsInputVolume}
-              onSetInputVolume={setObsInputVolume}
-            />
-          )}
-          
-          {mobileSection === 'settings' && (
-            <SettingsScreen
-              twitchUsername={twitchUsername}
-              twitchToken={twitchToken}
-              kickUsername={kickUsername}
-              kickToken={kickToken}
-              youtubeUsername={youtubeUsername}
-              youtubeAccessToken={youtubeAccessToken}
-              youtubeRefreshToken={youtubeRefreshToken}
-              notificationPreferences={notificationPreferences}
-              onNotificationPreferencesChange={setNotificationPreferences}
-              onConnectTwitch={handleConnectTwitch}
-              onConnectKick={handleConnectKick}
-              onConnectYouTube={handleConnectYouTube}
-              onDisconnectTwitch={handleDisconnectTwitch}
-              onDisconnectKick={handleDisconnectKick}
-              onDisconnectYouTube={handleDisconnectYouTube}
-              onResetOnboarding={handleResetOnboarding}
-              onClearCache={() => {}}
-            />
-          )}
+      <>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaText}>{activeSourceStatusSummary}</Text>
+          <Text style={styles.metaText}>{activeWritable ? "Writable" : "Read-only"}</Text>
         </View>
-        
-        {/* Bottom navigation */}
-        <BottomNavigation
-          activeSection={mobileSection}
-          onSectionChange={setMobileSection}
-        />
-        
-        {/* Search overlay (P1 Recommendation #8) */}
-        <SearchOverlay
-          isVisible={isSearchOpen}
-          onClose={() => setIsSearchOpen(false)}
-          onSearch={handleSearch}
-          results={searchResults}
-          isSearching={isSearching}
-          onResultPress={() => setIsSearchOpen(false)}
-          query={searchQuery}
-        />
-        
-        {/* Filter modal (P2 Recommendation #11) */}
-        <FilterSettings
-          isVisible={showFilterModal}
-          onClose={() => setShowFilterModal(false)}
-          filter={messageFilters}
-          onFilterChange={setMessageFilters}
-        />
 
-        <Modal
-          visible={showQrScanner}
-          animationType="slide"
-          transparent={false}
-          onRequestClose={() => {
-            setShowQrScanner(false);
-            setQrScanLocked(false);
-          }}
-        >
-          <SafeAreaView style={styles.qrModalContainer}>
-            <View style={styles.qrModalHeader}>
-              <Text style={styles.qrModalTitle}>Scan OBS QR</Text>
-              <Pressable
-                style={styles.qrModalCloseButton}
-                onPress={() => {
-                  setShowQrScanner(false);
-                  setQrScanLocked(false);
-                }}
-              >
-                <Text style={styles.qrModalCloseButtonText}>Close</Text>
-              </Pressable>
-            </View>
-
-            <View style={styles.qrCameraFrame}>
-              {cameraPermission?.granted ? (
-                <CameraView
-                  style={styles.qrCamera}
-                  barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                  onBarcodeScanned={showQrScanner && !qrScanLocked ? handleObsQrScanned : undefined}
-                />
-              ) : (
-                <View style={styles.qrCameraPlaceholder}>
-                  <Text style={styles.qrHintText}>Camera permission is required to scan QR codes.</Text>
-                </View>
-              )}
-            </View>
-
-            <Text style={styles.qrHintText}>
-              Scan an OBS connection QR (for example: obsws://host:port?password=...)
-            </Text>
-          </SafeAreaView>
-        </Modal>
-        
-        <StatusBar style="light" />
-      </SafeAreaView>
-    </SafeAreaProvider>
-  );
-}
-
-// ============================================================================
-// Section Components
-// ============================================================================
-
-interface ChatsSectionProps {
-  sources: ChatSource[];
-  tabs: ChatTab[];
-  activeTabId: string | null;
-  onSelectTab: (id: string) => void;
-  onCloseTab: (id: string) => void;
-  messages: EnhancedChatMessage[];
-  isLoading: boolean;
-  emoteMap: Record<string, string>;
-  badgeMap: Record<string, string>;
-  filter: MessageFilter;
-  onAddChannel: () => void;
-  onClearFilters: () => void;
-  connectionStatuses: Map<string, ChatAdapterStatus>;
-  onOpenSearch: () => void;
-  onOpenFilters: () => void;
-}
-
-const ChatsSection = memo(function ChatsSection({
-  sources,
-  tabs,
-  activeTabId,
-  onSelectTab,
-  onCloseTab,
-  messages,
-  isLoading,
-  emoteMap,
-  badgeMap,
-  filter,
-  onAddChannel,
-  onClearFilters,
-  connectionStatuses,
-  onOpenSearch,
-  onOpenFilters,
-}: ChatsSectionProps) {
-  const sourceById = useMemo(() => {
-    const next = new Map<string, ChatSource>();
-    for (const source of sources) {
-      next.set(source.id, source);
-    }
-    return next;
-  }, [sources]);
-
-  if (tabs.length === 0) {
-    return <NoChatEmptyState onAddChannel={onAddChannel} />;
-  }
-  
-  return (
-    <View style={styles.chatSection}>
-      {/* Tab bar */}
-      <View style={styles.tabBarContainer}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.tabBarScroll}
-          contentContainerStyle={styles.tabBar}
-          keyboardShouldPersistTaps="handled"
-        >
-          {tabs.map((tab) => {
-            const tabSources = tab.sourceIds
-              .map((sourceId) => sourceById.get(sourceId))
-              .filter((source): source is ChatSource => Boolean(source));
-            const primarySource = tabSources[0];
-            const firstSourceId = tab.sourceIds[0] ?? '';
-            const labelFromTab = tab.label.includes('/') ? tab.label.split('/').slice(1).join('/') : tab.label;
-            const labelFromSourceId = firstSourceId.includes(':')
-              ? firstSourceId.split(':').slice(1).join(':')
-              : firstSourceId.includes('/')
-                ? firstSourceId.split('/').slice(1).join('/')
-                : firstSourceId;
-            const fallbackLabel = labelFromTab.trim() || labelFromSourceId.trim() || 'chat';
-            const baseChannelLabel = primarySource?.channel?.trim() || fallbackLabel;
-            const tabLabel = primarySource
-              ? tabSources.length > 1
-                ? `${baseChannelLabel} +${tabSources.length - 1}`
-                : baseChannelLabel
-              : fallbackLabel;
-
-            return (
-              <Pressable
-                key={tab.id}
-                style={[styles.tab, activeTabId === tab.id && styles.tabActive]}
-                onPress={() => onSelectTab(tab.id)}
-              >
-                <View style={styles.tabContent}>
-                  {primarySource && (
-                    <Image source={{ uri: PLATFORM_LOGOS[primarySource.platform] }} style={styles.tabPlatformLogo} />
-                  )}
-                  <Text
-                    style={[styles.tabText, activeTabId === tab.id && styles.tabTextActive]}
-                    numberOfLines={1}
-                  >
-                    {tabLabel}
-                  </Text>
-                </View>
-                {connectionStatuses.get(tab.sourceIds[0]) && (
-                  <View style={styles.tabStatus}>
-                    <ConnectionStatusBadge
-                      status={connectionStatuses.get(tab.sourceIds[0]) || 'disconnected'}
-                    />
-                  </View>
-                )}
-                <Pressable
-                  style={styles.tabClose}
-                  onPress={() => onCloseTab(tab.id)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <Text style={styles.tabCloseText}>×</Text>
-                </Pressable>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-        
-        {/* Action buttons */}
-        <View style={styles.tabActions}>
-          <Pressable style={styles.tabActionButton} onPress={onOpenSearch}>
-            <Text style={styles.tabActionIcon}>🔍</Text>
-          </Pressable>
-          <Pressable style={styles.tabActionButton} onPress={onOpenFilters}>
-            <Text style={styles.tabActionIcon}>⚙️</Text>
-          </Pressable>
-        </View>
-      </View>
-      
-      {/* Chat list */}
-      <ChatList
-        messages={messages}
-        isLoading={isLoading}
-        emoteMap={emoteMap}
-        badgeMap={badgeMap}
-        filter={filter}
-        onAddChannel={onAddChannel}
-        onClearFilters={onClearFilters}
-      />
-    </View>
-  );
-});
-
-interface AddChannelSectionProps {
-  platformInput: PlatformId;
-  setPlatformInput: (platform: PlatformId) => void;
-  channelInput: string;
-  setChannelInput: (channel: string) => void;
-  onAddChannel: () => void;
-  sources: ChatSource[];
-  onRemoveChannel: (id: string) => void;
-  mergeSourceIds: string[];
-  onToggleMergeSource: (id: string) => void;
-  onCombineSources: () => void;
-}
-
-const AddChannelSection = memo(function AddChannelSection({
-  platformInput,
-  setPlatformInput,
-  channelInput,
-  setChannelInput,
-  onAddChannel,
-  sources,
-  onRemoveChannel,
-  mergeSourceIds,
-  onToggleMergeSource,
-  onCombineSources,
-}: AddChannelSectionProps) {
-  return (
-    <ScrollView style={styles.addSection} contentContainerStyle={styles.addSectionContent}>
-      <Text style={styles.sectionTitle}>Add Channel</Text>
-      
-      {/* Platform selection */}
-      <View style={styles.platformSelector}>
-        {PLATFORM_OPTIONS.map((platform) => (
-          <Pressable
-            key={platform}
-            style={[
-              styles.platformOption,
-              platformInput === platform && {
-                backgroundColor: PLATFORM_COLORS[platform] + '30',
-                borderColor: PLATFORM_COLORS[platform],
-              },
-            ]}
-            onPress={() => setPlatformInput(platform)}
-          >
-            <Image source={{ uri: PLATFORM_LOGOS[platform] }} style={styles.platformLogo} />
-            <Text style={styles.platformLabel}>{PLATFORM_NAMES[platform]}</Text>
-          </Pressable>
-        ))}
-      </View>
-      
-      {/* Channel input */}
-      <View style={styles.channelInputContainer}>
-        <TextInput
-          style={styles.channelInput}
-          placeholder={`Enter ${PLATFORM_NAMES[platformInput]} channel...`}
-          placeholderTextColor={colors.text.muted}
-          value={channelInput}
-          onChangeText={setChannelInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-          onSubmitEditing={onAddChannel}
-        />
-        <Pressable
-          style={[styles.addButton, !channelInput.trim() && styles.addButtonDisabled]}
-          onPress={onAddChannel}
-          disabled={!channelInput.trim()}
-        >
-          <Text style={styles.addButtonText}>Add</Text>
-        </Pressable>
-      </View>
-      
-      {/* Active channels list */}
-      {sources.length > 0 && (
-        <View style={styles.activeChannels}>
-          <Text style={styles.subsectionTitle}>Active Channels</Text>
-          {sources.map((source) => {
-            const isSelectedForMerge = mergeSourceIds.includes(source.id);
-            return (
-              <View key={source.id} style={styles.channelRow}>
-                <View style={[styles.channelIndicator, { backgroundColor: PLATFORM_COLORS[source.platform] }]} />
-                <Text style={styles.channelName}>{source.channel}</Text>
-                <Text style={styles.channelPlatform}>{PLATFORM_NAMES[source.platform]}</Text>
-                <Pressable
-                  style={[styles.mergeToggleButton, isSelectedForMerge && styles.mergeToggleButtonActive]}
-                  onPress={() => onToggleMergeSource(source.id)}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Select ${source.channel} for merge`}
-                >
-                  <Text style={[styles.mergeToggleButtonText, isSelectedForMerge && styles.mergeToggleButtonTextActive]}>
-                    {isSelectedForMerge ? '✓' : '+'}
-                  </Text>
-                </Pressable>
-                <Pressable style={styles.removeButton} onPress={() => onRemoveChannel(source.id)}>
-                  <Text style={styles.removeButtonText}>Remove</Text>
-                </Pressable>
+        <FlatList
+          ref={listRef}
+          data={activeMessages}
+          keyExtractor={(item, index) => `${item.id}-${item.timestamp}-${index}`}
+          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+          style={styles.messagesList}
+          contentContainerStyle={styles.messagesContent}
+          renderItem={({ item }) => (
+            <View style={styles.messageCard}>
+              <View style={styles.messageMetaRow}>
+                <Text style={styles.messageMeta}>
+                  {platformTag(item.platform as PlatformId)} #{item.channel}
+                </Text>
+                <Text style={styles.messageMeta}>{formatClock(item.timestamp)}</Text>
               </View>
-            );
-          })}
-        </View>
-      )}
+              <Text style={styles.messageAuthor}>{item.displayName || item.username}</Text>
+              <Text style={styles.messageText}>{item.message}</Text>
+            </View>
+          )}
+          ListEmptyComponent={<Text style={styles.emptyText}>No messages yet for this tab.</Text>}
+        />
 
-      {sources.length > 1 && (
-        <View style={styles.mergePanel}>
-          <Text style={styles.subsectionTitle}>Merge Two Chats</Text>
-          <Text style={styles.mergeHint}>Select 2 active channels above, then combine into one merged chat tab.</Text>
+        {sendTargets.length > 1 ? (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.targetStrip}>
+            {sendTargets.map((target) => {
+              const active = target.id === sendTargetId;
+              return (
+                <Pressable
+                  key={String(target.id)}
+                  onPress={() => setSendTargetId(target.id)}
+                  style={active ? [styles.targetPill, styles.targetPillActive] : styles.targetPill}
+                >
+                  <Text style={active ? [styles.targetPillText, styles.targetPillTextActive] : styles.targetPillText}>
+                    {target.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : null}
+
+        <View style={styles.composerRow}>
+          <TextInput
+            value={composerText}
+            onChangeText={setComposerText}
+            placeholder={activeWritable ? "Type a message" : "Read-only tab"}
+            placeholderTextColor="#6c7888"
+            editable={activeWritable}
+            style={[styles.input, styles.grow]}
+          />
           <Pressable
+            onPress={() => void sendActiveMessage()}
+            disabled={!activeWritable || sending || !composerText.trim()}
             style={[
-              styles.mergeActionButton,
-              mergeSourceIds.length !== 2 && styles.mergeActionButtonDisabled,
+              styles.primaryButton,
+              !activeWritable || sending || !composerText.trim() ? styles.primaryButtonDisabled : null
             ]}
-            onPress={onCombineSources}
-            disabled={mergeSourceIds.length !== 2}
           >
-            <Text style={styles.mergeActionButtonText}>Combine Selected ({mergeSourceIds.length}/2)</Text>
+            <Text style={styles.primaryButtonText}>{sending ? "Sending..." : "Send"}</Text>
           </Pressable>
         </View>
-      )}
-    </ScrollView>
-  );
-});
+      </>
+    );
+  };
 
-interface ObsSectionProps {
-  obsConnected: boolean;
-  obsConnecting: boolean;
-  obsStatusText: string;
-  obsHost: string;
-  setObsHost: (value: string) => void;
-  obsPort: string;
-  setObsPort: (value: string) => void;
-  obsPassword: string;
-  setObsPassword: (value: string) => void;
-  obsSavedName: string;
-  setObsSavedName: (value: string) => void;
-  obsEditingConnectionId: string | null;
-  obsSavedConnections: ObsSavedConnection[];
-  obsReachabilityMap: Map<string, ObsReachability>;
-  obsScenes: string[];
-  obsActiveScene: string | null;
-  obsPreviewUri: string | null;
-  obsSceneItems: ObsSceneItem[];
-  obsAudioInputs: ObsAudioInput[];
-  obsStats: ObsStats;
-  obsStreaming: boolean;
-  obsRecording: boolean;
-  obsStreamTimecode: number | null;
-  obsRecordTimecode: number | null;
-  onConnect: () => void;
-  onConnectSavedConnection: (connectionId: string) => void;
-  onEditSavedConnection: (connectionId: string) => void;
-  onSaveCurrentConnection: () => void;
-  onOpenQrScanner: () => void;
-  onDisconnect: (reason?: string) => void;
-  onRefresh: () => Promise<void>;
-  onSwitchScene: (sceneName: string) => Promise<void>;
-  onToggleStream: () => Promise<void>;
-  onToggleRecord: () => Promise<void>;
-  onToggleSceneItem: (sceneItem: ObsSceneItem) => Promise<void>;
-  onToggleInputMute: (input: ObsAudioInput) => Promise<void>;
-  onAdjustInputVolume: (input: ObsAudioInput, delta: number) => Promise<void>;
-  onSetInputVolume: (input: ObsAudioInput, volumeMul: number) => Promise<void>;
-}
+  const renderObsController = () => {
+    const status = obsConnected ? "connected" : obsConnecting ? "connecting" : "disconnected";
+    const droppedFramePercent =
+      obsStats.outputSkippedFrames !== null &&
+      obsStats.outputTotalFrames !== null &&
+      obsStats.outputTotalFrames > 0
+        ? (obsStats.outputSkippedFrames / obsStats.outputTotalFrames) * 100
+        : null;
 
-const ObsSection = memo(function ObsSection({
-  obsConnected,
-  obsConnecting,
-  obsStatusText,
-  obsHost,
-  setObsHost,
-  obsPort,
-  setObsPort,
-  obsPassword,
-  setObsPassword,
-  obsSavedName,
-  setObsSavedName,
-  obsEditingConnectionId,
-  obsSavedConnections,
-  obsReachabilityMap,
-  obsScenes,
-  obsActiveScene,
-  obsPreviewUri,
-  obsSceneItems,
-  obsAudioInputs,
-  obsStats,
-  obsStreaming,
-  obsRecording,
-  obsStreamTimecode,
-  obsRecordTimecode,
-  onConnect,
-  onConnectSavedConnection,
-  onEditSavedConnection,
-  onSaveCurrentConnection,
-  onOpenQrScanner,
-  onDisconnect,
-  onRefresh,
-  onSwitchScene,
-  onToggleStream,
-  onToggleRecord,
-  onToggleSceneItem,
-  onToggleInputMute,
-  onAdjustInputVolume,
-  onSetInputVolume,
-}: ObsSectionProps) {
-  const status = obsConnected ? 'connected' : obsConnecting ? 'connecting' : 'disconnected';
-  const [obsScrollEnabled, setObsScrollEnabled] = useState(true);
-  const [draggingInputName, setDraggingInputName] = useState<string | null>(null);
+    return (
+      <View style={styles.obsCard}>
+        <Text style={styles.sectionTitle}>OBS Controller</Text>
+        <Text style={styles.configHint}>Control one OBS instance remotely via obs-websocket.</Text>
 
-  const applyMixerTouch = useCallback(
-    (input: ObsAudioInput, locationY: number) => {
-      const clampedY = Math.max(0, Math.min(OBS_MIXER_TRACK_HEIGHT, locationY));
-      const nextVolume = clamp01(1 - clampedY / OBS_MIXER_TRACK_HEIGHT);
-      void onSetInputVolume(input, nextVolume);
-    },
-    [onSetInputVolume]
-  );
-
-  const droppedFramePercent =
-    obsStats.outputSkippedFrames !== null &&
-    obsStats.outputTotalFrames !== null &&
-    obsStats.outputTotalFrames > 0
-      ? (obsStats.outputSkippedFrames / obsStats.outputTotalFrames) * 100
-      : null;
-
-  return (
-    <ScrollView
-      style={styles.obsSection}
-      contentContainerStyle={styles.obsSectionContent}
-      scrollEnabled={obsScrollEnabled}
-    >
-      <Text style={styles.sectionTitle}>OBS Control</Text>
-      <Text style={styles.obsSubtitle}>Connect to obs-websocket and control your stream.</Text>
-
-      <View style={styles.obsConnectionCard}>
-        <View style={styles.obsConnectionRow}>
+        <View style={styles.addRow}>
           <TextInput
             value={obsHost}
             onChangeText={setObsHost}
             placeholder="Host"
-            placeholderTextColor={colors.text.muted}
+            placeholderTextColor="#6c7888"
             autoCapitalize="none"
-            style={[styles.obsInput, styles.obsHostInput]}
+            style={[styles.input, styles.grow]}
           />
           <TextInput
             value={obsPort}
             onChangeText={setObsPort}
             placeholder="Port"
-            placeholderTextColor={colors.text.muted}
+            placeholderTextColor="#6c7888"
             keyboardType="number-pad"
-            style={[styles.obsInput, styles.obsPortInput]}
+            style={styles.portInput}
           />
         </View>
 
         <TextInput
           value={obsPassword}
           onChangeText={setObsPassword}
-          placeholder="Password (if set in OBS)"
-          placeholderTextColor={colors.text.muted}
+          placeholder="OBS password (if set)"
+          placeholderTextColor="#6c7888"
           secureTextEntry
-          style={styles.obsInput}
-        />
-
-        <TextInput
-          value={obsSavedName}
-          onChangeText={setObsSavedName}
-          placeholder="Nickname (optional)"
-          placeholderTextColor={colors.text.muted}
-          style={styles.obsInput}
+          style={styles.input}
         />
 
         <View style={styles.obsStatusRow}>
-          <Text style={styles.obsStatusLabel}>Status: {status}</Text>
-          <Text style={styles.obsStatusValue} numberOfLines={1}>
-            {obsStatusText}
-          </Text>
+          <Text style={styles.metaText}>Status: {status}</Text>
+          <Text style={styles.metaText}>{obsStatusText}</Text>
         </View>
 
         <View style={styles.obsActionsRow}>
           <Pressable
-            onPress={obsConnected ? () => onDisconnect('Disconnected') : onConnect}
-            style={[
-              styles.obsPrimaryButton,
-              obsConnected && styles.obsDangerButton,
-              obsConnecting && styles.obsPrimaryButtonDisabled,
-            ]}
-            disabled={obsConnecting}
+            onPress={obsConnected ? () => disconnectObs("Disconnected") : connectObs}
+            style={obsConnected ? styles.warningButton : styles.primaryButton}
           >
-            <Text style={styles.obsPrimaryButtonText}>
-              {obsConnected ? 'Disconnect' : obsConnecting ? 'Connecting...' : 'Connect'}
-            </Text>
+            <Text style={styles.primaryButtonText}>{obsConnected ? "Disconnect" : obsConnecting ? "Connecting..." : "Connect"}</Text>
           </Pressable>
-          <Pressable
-            onPress={() => void onRefresh()}
-            style={[styles.obsSecondaryButton, !obsConnected && styles.obsSecondaryButtonDisabled]}
-            disabled={!obsConnected}
-          >
-            <Text style={styles.obsSecondaryButtonText}>Refresh</Text>
+          <Pressable onPress={() => void refreshObsState()} disabled={!obsConnected} style={styles.secondaryButton}>
+            <Text style={styles.secondaryButtonText}>Refresh</Text>
           </Pressable>
         </View>
 
-        <View style={styles.obsActionsRow}>
-          <Pressable onPress={onSaveCurrentConnection} style={styles.obsPrimaryButton}>
-            <Text style={styles.obsPrimaryButtonText}>
-              {obsEditingConnectionId ? 'Update Saved' : 'Save Connection'}
-            </Text>
-          </Pressable>
-          <Pressable onPress={onOpenQrScanner} style={styles.obsSecondaryButton}>
-            <Text style={styles.obsSecondaryButtonText}>Scan QR</Text>
-          </Pressable>
-        </View>
-      </View>
-
-      {obsSavedConnections.length > 0 && (
-        <>
-          <Text style={styles.obsBlockTitle}>Saved Connections</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.obsSavedConnectionsRow}
-            style={styles.obsSavedConnectionsScroll}
-          >
-            {obsSavedConnections.map((connection) => {
-              const reachability = obsReachabilityMap.get(connection.id) ?? 'checking';
-              const reachabilityColor =
-                reachability === 'reachable'
-                  ? '#5fd66c'
-                  : reachability === 'checking'
-                    ? '#d0b14f'
-                    : '#e15d68';
-              const reachabilityLabel =
-                reachability === 'reachable' ? 'Reachable' : reachability === 'checking' ? 'Checking' : 'Offline';
-
-              return (
-                <View key={connection.id} style={styles.obsSavedConnectionCard}>
-                  <Text style={styles.obsSavedConnectionName} numberOfLines={1}>
-                    {getObsConnectionNickname(connection)}
-                  </Text>
-                  <Text style={styles.obsSavedConnectionHost} numberOfLines={1}>
-                    {connection.host}:{connection.port}
-                  </Text>
-                  <View style={styles.obsReachabilityRow}>
-                    <View style={[styles.obsReachabilityDot, { backgroundColor: reachabilityColor }]} />
-                    <Text style={styles.obsReachabilityText}>{reachabilityLabel}</Text>
-                  </View>
-                  <View style={styles.obsSavedCardActions}>
-                    <Pressable
-                      style={[styles.obsSavedCardConnectButton]}
-                      onPress={() => onConnectSavedConnection(connection.id)}
-                    >
-                      <Text style={styles.obsSavedCardConnectButtonText}>Connect</Text>
-                    </Pressable>
-                    <Pressable style={styles.obsSavedCardEditButton} onPress={() => onEditSavedConnection(connection.id)}>
-                      <Text style={styles.obsSavedCardEditButtonText}>Edit</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              );
-            })}
-          </ScrollView>
-        </>
-      )}
-
-      {!obsConnected ? (
-        <ObsNotConnectedEmptyState onConnect={onConnect} onLearnMore={() => {}} />
-      ) : (
-        <>
-          <View style={styles.obsActionsRow}>
-            <Pressable onPress={() => void onToggleStream()} style={styles.obsPrimaryButton}>
-              <Text style={styles.obsPrimaryButtonText}>
-                {obsStreaming ? 'Stop Stream' : 'Start Stream'}
-              </Text>
-            </Pressable>
-            <Pressable onPress={() => void onToggleRecord()} style={styles.obsPrimaryButton}>
-              <Text style={styles.obsPrimaryButtonText}>
-                {obsRecording ? 'Stop Record' : 'Start Record'}
-              </Text>
-            </Pressable>
-          </View>
-
-          <View style={styles.obsTimeRow}>
-            <Text style={styles.obsTimeText}>Stream: {formatObsDuration(obsStreamTimecode)}</Text>
-            <Text style={styles.obsTimeText}>Record: {formatObsDuration(obsRecordTimecode)}</Text>
-          </View>
-
-          <Text style={styles.obsBlockTitle}>Scenes</Text>
-          {obsScenes.length > 0 ? (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.obsSceneStrip}>
-              {obsScenes.map((scene) => {
-                const active = scene === obsActiveScene;
-                return (
-                  <Pressable
-                    key={scene}
-                    onPress={() => void onSwitchScene(scene)}
-                    style={[styles.obsScenePill, active && styles.obsScenePillActive]}
-                  >
-                    <Text style={[styles.obsScenePillText, active && styles.obsScenePillTextActive]}>
-                      {scene}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          ) : (
-            <Text style={styles.obsHintText}>No scenes found yet. Tap Refresh.</Text>
-          )}
-
-          <Text style={styles.obsBlockTitle}>Active Preview</Text>
-          <View style={styles.obsPreviewCard}>
-            {obsPreviewUri ? (
-              <Image source={{ uri: obsPreviewUri }} style={styles.obsPreviewImage} resizeMode="cover" />
-            ) : (
-              <Text style={styles.obsHintText}>Preview will appear once OBS provides a scene screenshot.</Text>
-            )}
-          </View>
-
-          <Text style={styles.obsBlockTitle}>Scene Sources</Text>
-          {obsSceneItems.length > 0 ? (
-            <View style={styles.obsListCard}>
-              {obsSceneItems.map((item) => (
-                <View key={`${item.sceneItemId}-${item.sourceName}`} style={styles.obsListRow}>
-                  <Text style={styles.obsListLabel}>{item.sourceName}</Text>
-                  <Pressable
-                    onPress={() => void onToggleSceneItem(item)}
-                    style={[styles.obsSecondaryButton, item.enabled && styles.obsPrimaryButton]}
-                  >
-                    <Text style={[styles.obsSecondaryButtonText, item.enabled && styles.obsPrimaryButtonText]}>
-                      {item.enabled ? 'Visible' : 'Hidden'}
-                    </Text>
-                  </Pressable>
-                </View>
-              ))}
+        {obsConnected ? (
+          <>
+            <View style={styles.obsActionsRow}>
+              <Pressable onPress={() => void toggleObsStream()} style={styles.primaryButton}>
+                <Text style={styles.primaryButtonText}>{obsStreamActive ? "Stop Stream" : "Start Stream"}</Text>
+              </Pressable>
+              <Pressable onPress={() => void toggleObsRecord()} style={styles.primaryButton}>
+                <Text style={styles.primaryButtonText}>{obsRecordActive ? "Stop Record" : "Start Record"}</Text>
+              </Pressable>
             </View>
-          ) : (
-            <Text style={styles.obsHintText}>No scene sources found for the current scene.</Text>
-          )}
 
-          <Text style={styles.obsBlockTitle}>Audio Inputs</Text>
-          {obsAudioInputs.length > 0 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.obsMixerStripRow}
-              style={styles.obsMixerScroll}
-            >
-              {obsAudioInputs.map((input) => (
-                <View key={input.inputName} style={styles.obsMixerStrip}>
-                  <Text style={styles.obsMixerSourceName} numberOfLines={1}>
-                    {input.inputName}
-                  </Text>
-                  <Text style={styles.obsMixerDbValue}>{formatObsDbValue(input.volumeMul)}</Text>
-
-                  <View style={styles.obsMixerMetersRow}>
-                    <View
-                      style={[
-                        styles.obsMixerFaderTrack,
-                        draggingInputName === input.inputName && styles.obsMixerFaderTrackDragging,
-                      ]}
-                      onStartShouldSetResponder={() => true}
-                      onMoveShouldSetResponder={() => true}
-                      onResponderGrant={(event) => {
-                        setDraggingInputName(input.inputName);
-                        setObsScrollEnabled(false);
-                        applyMixerTouch(input, event.nativeEvent.locationY);
-                      }}
-                      onResponderMove={(event) => {
-                        applyMixerTouch(input, event.nativeEvent.locationY);
-                      }}
-                      onResponderRelease={() => {
-                        setDraggingInputName(null);
-                        setObsScrollEnabled(true);
-                      }}
-                      onResponderTerminate={() => {
-                        setDraggingInputName(null);
-                        setObsScrollEnabled(true);
-                      }}
-                    >
-                      <View
-                        style={[
-                          styles.obsMixerFaderFill,
-                          {
-                            height: Math.max(2, Math.round(clamp01(input.volumeMul) * OBS_MIXER_TRACK_HEIGHT)),
-                          },
-                        ]}
-                      />
-                      <View
-                        style={[
-                          styles.obsMixerFaderThumb,
-                          {
-                            bottom: Math.round(
-                              clamp01(input.volumeMul) * (OBS_MIXER_TRACK_HEIGHT - OBS_MIXER_THUMB_HEIGHT)
-                            ),
-                          },
-                        ]}
-                      />
-                    </View>
-
-                    <View style={styles.obsMixerLevelTrack}>
-                      <View style={styles.obsMixerLevelZones}>
-                        <View style={styles.obsMixerLevelZoneHigh} />
-                        <View style={styles.obsMixerLevelZoneMid} />
-                        <View style={styles.obsMixerLevelZoneLow} />
-                      </View>
-                      <View
-                        style={[
-                          styles.obsMixerLevelFill,
-                          {
-                            height: Math.max(3, Math.round(clamp01((obsVolumeToDb(input.volumeMul) + 60) / 60) * OBS_MIXER_TRACK_HEIGHT)),
-                            backgroundColor:
-                              obsVolumeToDb(input.volumeMul) > -10
-                                ? '#ef4e5d'
-                                : obsVolumeToDb(input.volumeMul) > -20
-                                  ? '#c9a327'
-                                  : '#52d766',
-                          },
-                        ]}
-                      />
-                    </View>
-
-                    <View style={styles.obsMixerScaleCol}>
-                      {OBS_AUDIO_DB_TICKS.map((tick) => (
-                        <Text key={`${input.inputName}-${tick}`} style={styles.obsMixerScaleText}>
-                          {tick}
-                        </Text>
-                      ))}
-                    </View>
-                  </View>
-
-                  <View style={styles.obsMixerActionsRow}>
+            <Text style={styles.sectionLabel}>Scenes</Text>
+            {obsScenes.length > 0 ? (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sceneStrip}>
+                {obsScenes.map((scene) => {
+                  const active = scene === obsCurrentScene;
+                  return (
                     <Pressable
-                      onPress={() => void onToggleInputMute(input)}
-                      style={[styles.obsMixerMuteButton, input.muted && styles.obsMixerMuteButtonActive]}
+                      key={scene}
+                      onPress={() => void switchObsScene(scene)}
+                      style={active ? [styles.scenePill, styles.scenePillActive] : styles.scenePill}
                     >
-                      <Text style={styles.obsMixerMuteButtonText}>{input.muted ? 'Unmute' : 'Mute'}</Text>
+                      <Text style={active ? [styles.scenePillText, styles.scenePillTextActive] : styles.scenePillText}>{scene}</Text>
                     </Pressable>
-                    <View style={styles.obsMixerGainButtons}>
-                      <Pressable
-                        onPress={() => void onAdjustInputVolume(input, -0.05)}
-                        style={styles.obsMixerGainButton}
-                      >
-                        <Text style={styles.obsMixerGainButtonText}>-</Text>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <Text style={styles.emptyText}>No scenes found yet. Tap Refresh.</Text>
+            )}
+
+            <Text style={styles.sectionLabel}>Scene Sources</Text>
+            {obsSceneItems.length > 0 ? (
+              <View style={styles.listBlock}>
+                {obsSceneItems.map((item) => (
+                  <View key={`${item.sceneItemId}-${item.sourceName}`} style={styles.listRow}>
+                    <Text style={styles.listRowLabel}>{item.sourceName}</Text>
+                    <Pressable
+                      onPress={() => void toggleObsSceneItem(item)}
+                      style={item.enabled ? styles.primaryButton : styles.warningButton}
+                    >
+                      <Text style={styles.primaryButtonText}>{item.enabled ? "Visible" : "Hidden"}</Text>
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.emptyText}>No scene sources found for the current scene.</Text>
+            )}
+
+            <Text style={styles.sectionLabel}>Audio Inputs</Text>
+            {obsAudioInputs.length > 0 ? (
+              <View style={styles.listBlock}>
+                {obsAudioInputs.map((input) => (
+                  <View key={input.inputName} style={styles.audioRow}>
+                    <View style={styles.audioDetails}>
+                      <Text style={styles.listRowLabel}>{input.inputName}</Text>
+                      <Text style={styles.metaText}>Volume: {(input.volumeMul * 100).toFixed(0)}%</Text>
+                    </View>
+                    <View style={styles.audioActions}>
+                      <Pressable onPress={() => void adjustObsInputVolume(input, -0.1)} style={styles.secondaryButton}>
+                        <Text style={styles.secondaryButtonText}>-10%</Text>
                       </Pressable>
-                      <Pressable
-                        onPress={() => void onAdjustInputVolume(input, 0.05)}
-                        style={styles.obsMixerGainButton}
-                      >
-                        <Text style={styles.obsMixerGainButtonText}>+</Text>
+                      <Pressable onPress={() => void adjustObsInputVolume(input, 0.1)} style={styles.secondaryButton}>
+                        <Text style={styles.secondaryButtonText}>+10%</Text>
+                      </Pressable>
+                      <Pressable onPress={() => void toggleObsInputMute(input)} style={input.muted ? styles.warningButton : styles.primaryButton}>
+                        <Text style={styles.primaryButtonText}>{input.muted ? "Muted" : "Live"}</Text>
                       </Pressable>
                     </View>
                   </View>
-                </View>
-              ))}
-            </ScrollView>
-          ) : (
-            <Text style={styles.obsHintText}>No audio inputs found.</Text>
-          )}
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.emptyText}>No audio inputs found.</Text>
+            )}
 
-          <Text style={styles.obsBlockTitle}>Live Stats</Text>
-          <View style={styles.obsStatsRow}>
-            <Text style={styles.obsStatText}>
-              CPU: {obsStats.cpuUsage !== null ? `${obsStats.cpuUsage.toFixed(1)}%` : 'n/a'}
-            </Text>
-            <Text style={styles.obsStatText}>
-              FPS: {obsStats.activeFps !== null ? obsStats.activeFps.toFixed(1) : 'n/a'}
-            </Text>
-            <Text style={styles.obsStatText}>
-              Dropped: {droppedFramePercent !== null ? `${droppedFramePercent.toFixed(2)}%` : 'n/a'}
-            </Text>
+            <Text style={styles.sectionLabel}>Live Stats</Text>
+            <View style={styles.statsRow}>
+              <Text style={styles.metaText}>
+                CPU: {obsStats.cpuUsage !== null ? `${obsStats.cpuUsage.toFixed(1)}%` : "n/a"}
+              </Text>
+              <Text style={styles.metaText}>
+                FPS: {obsStats.activeFps !== null ? obsStats.activeFps.toFixed(1) : "n/a"}
+              </Text>
+              <Text style={styles.metaText}>
+                Dropped: {droppedFramePercent !== null ? `${droppedFramePercent.toFixed(2)}%` : "n/a"}
+              </Text>
+            </View>
+          </>
+        ) : null}
+      </View>
+    );
+  };
+
+  return (
+    <SafeAreaProvider>
+      <SafeAreaView style={styles.safeArea}>
+        <StatusBar style="light" />
+        <KeyboardAvoidingView behavior={RNPlatform.OS === "ios" ? "padding" : undefined} style={styles.container}>
+          <View style={styles.header}>
+            <Text style={styles.title}>MultiChat</Text>
+            <Text style={styles.subtitle}>Mobile core</Text>
           </View>
-        </>
-      )}
-    </ScrollView>
+
+          <View style={styles.contentArea}>
+            {mobileSection === "chats" ? (
+              <>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabsStrip}>
+                  <View style={styles.tabsRow}>
+                    {chatTabs.map((tab) => {
+                      const active = tab.id === activeTabId;
+                      const tabStatus =
+                        tab.sourceIds.length === 1
+                          ? statusLabel(statusBySource[tab.sourceIds[0]])
+                          : `${tab.sourceIds.filter((id) => statusBySource[id] === "connected").length}/${tab.sourceIds.length} live`;
+
+                      return (
+                        <View key={tab.id} style={active ? [styles.tabCard, styles.tabCardActive] : styles.tabCard}>
+                          <Pressable onPress={() => setActiveTabId(tab.id)} style={styles.tabSelect}>
+                            <Text style={styles.tabTag}>
+                              {tab.sourceIds.length > 1 ? "COMBO" : platformTag(sourceById.get(tab.sourceIds[0])?.platform ?? "twitch")}
+                            </Text>
+                            <Text style={styles.tabLabel}>{tab.label}</Text>
+                            <Text style={styles.tabStatus}>{tabStatus}</Text>
+                          </Pressable>
+                          <Pressable onPress={() => void closeTab(tab.id)} style={styles.tabClose}>
+                            <Text style={styles.tabCloseText}>x</Text>
+                          </Pressable>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+
+                {activeChatTab ? (
+                  renderChatTabBody()
+                ) : (
+                  <View style={styles.emptyState}>
+                    <Text style={styles.emptyTitle}>No chats yet</Text>
+                    <Text style={styles.emptyText}>Go to Add and open your first chat.</Text>
+                  </View>
+                )}
+              </>
+            ) : null}
+
+            {mobileSection === "add" ? (
+              <View style={styles.addCard}>
+                <Text style={styles.sectionTitle}>Add Chat</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.platformRow}>
+                  {PLATFORM_OPTIONS.map((platform) => {
+                    const active = platformInput === platform;
+                    return (
+                      <Pressable
+                        key={platform}
+                        onPress={() => setPlatformInput(platform)}
+                        style={active ? [styles.platformPill, styles.platformPillActive] : styles.platformPill}
+                      >
+                        <Text style={active ? [styles.platformPillText, styles.platformPillTextActive] : styles.platformPillText}>
+                          {platform}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+
+                <View style={styles.addRow}>
+                  <TextInput
+                    value={channelInput}
+                    onChangeText={setChannelInput}
+                    placeholder={channelPlaceholder}
+                    placeholderTextColor="#6c7888"
+                    autoCapitalize="none"
+                    style={[styles.input, styles.grow]}
+                  />
+                  <Pressable onPress={() => void addChannelTab()} disabled={busy} style={styles.primaryButton}>
+                    <Text style={styles.primaryButtonText}>{busy ? "Opening..." : "Open"}</Text>
+                  </Pressable>
+                </View>
+
+                <Pressable onPress={openCombinedTab} style={styles.secondaryButton}>
+                  <Text style={styles.secondaryButtonText}>Combine Open Chats</Text>
+                </Pressable>
+              </View>
+            ) : null}
+
+            {mobileSection === "obs" ? renderObsController() : null}
+
+            {mobileSection === "settings" ? (
+              <ScrollView style={styles.settingsScroll} contentContainerStyle={styles.settingsContent}>
+                <View style={styles.configCard}>
+                  <Text style={styles.sectionTitle}>Accounts</Text>
+                  <Text style={styles.configHint}>OAuth sign-in is temporarily disabled for mobile.</Text>
+                  <Text style={styles.configHint}>Twitch and Kick are currently read-only in this build.</Text>
+
+                  <Text style={styles.sectionTitle}>YouTube (read-only)</Text>
+                  <TextInput
+                    value={youtubeApiKey}
+                    onChangeText={setYoutubeApiKey}
+                    placeholder="YouTube API key"
+                    placeholderTextColor="#6c7888"
+                    autoCapitalize="none"
+                    secureTextEntry
+                    style={styles.input}
+                  />
+                </View>
+              </ScrollView>
+            ) : null}
+          </View>
+
+          <View style={styles.bottomNav}>
+            <Pressable
+              onPress={openChatsSection}
+              style={mobileSection === "chats" ? [styles.bottomNavItem, styles.bottomNavItemActive] : styles.bottomNavItem}
+            >
+              <Text style={mobileSection === "chats" ? [styles.bottomNavIcon, styles.bottomNavTextActive] : styles.bottomNavIcon}>⌂</Text>
+              <Text style={mobileSection === "chats" ? [styles.bottomNavText, styles.bottomNavTextActive] : styles.bottomNavText}>Chats</Text>
+            </Pressable>
+            <Pressable
+              onPress={openAddSection}
+              style={mobileSection === "add" ? [styles.bottomNavItem, styles.bottomNavItemActive] : styles.bottomNavItem}
+            >
+              <Text style={mobileSection === "add" ? [styles.bottomNavIcon, styles.bottomNavTextActive] : styles.bottomNavIcon}>＋</Text>
+              <Text style={mobileSection === "add" ? [styles.bottomNavText, styles.bottomNavTextActive] : styles.bottomNavText}>Add</Text>
+            </Pressable>
+            <Pressable
+              onPress={openObsControllerTab}
+              style={mobileSection === "obs" ? [styles.bottomNavItem, styles.bottomNavItemActive] : styles.bottomNavItem}
+            >
+              <Text style={mobileSection === "obs" ? [styles.bottomNavIcon, styles.bottomNavTextActive] : styles.bottomNavIcon}>◎</Text>
+              <Text style={mobileSection === "obs" ? [styles.bottomNavText, styles.bottomNavTextActive] : styles.bottomNavText}>OBS</Text>
+            </Pressable>
+            <Pressable
+              onPress={openSettingsSection}
+              style={mobileSection === "settings" ? [styles.bottomNavItem, styles.bottomNavItemActive] : styles.bottomNavItem}
+            >
+              <Text style={mobileSection === "settings" ? [styles.bottomNavIcon, styles.bottomNavTextActive] : styles.bottomNavIcon}>⚙</Text>
+              <Text style={mobileSection === "settings" ? [styles.bottomNavText, styles.bottomNavTextActive] : styles.bottomNavText}>Settings</Text>
+            </Pressable>
+          </View>
+
+          {notice ? (
+            <View style={styles.noticeBar}>
+              <Text style={styles.noticeText}>{notice}</Text>
+            </View>
+          ) : null}
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
-});
-
-// ============================================================================
-// Bottom Navigation Component
-// ============================================================================
-
-interface BottomNavigationProps {
-  activeSection: MobileSection;
-  onSectionChange: (section: MobileSection) => void;
 }
 
-const BottomNavigation = memo(function BottomNavigation({
-  activeSection,
-  onSectionChange,
-}: BottomNavigationProps) {
-  const sections: { id: MobileSection; icon: string; label: string }[] = [
-    { id: 'chats', icon: '💬', label: 'Chats' },
-    { id: 'add', icon: '➕', label: 'Add' },
-    { id: 'obs', icon: '🎥', label: 'OBS' },
-    { id: 'settings', icon: '⚙️', label: 'Settings' },
-  ];
-  
-  return (
-    <View style={styles.bottomNav}>
-      {sections.map((section) => (
-        <Pressable
-          key={section.id}
-          style={[styles.navItem, activeSection === section.id && styles.navItemActive]}
-          onPress={() => onSectionChange(section.id)}
-          accessibilityLabel={section.label}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: activeSection === section.id }}
-        >
-          <Text style={styles.navIcon}>{section.icon}</Text>
-          <Text style={[styles.navLabel, activeSection === section.id && styles.navLabelActive]}>
-            {section.label}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
-  );
-});
-
-// ============================================================================
-// Styles
-// ============================================================================
-
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: "#070a10"
+  },
   container: {
     flex: 1,
-    backgroundColor: colors.background.primary,
+    backgroundColor: "#070a10",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 8
   },
-  content: {
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    marginBottom: 10
+  },
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
+  },
+  contentArea: {
     flex: 1,
+    minHeight: 0
   },
-  errorContainer: {
-    zIndex: 100,
+  settingsScroll: {
+    flex: 1
   },
-  
-  // Chat section
-  chatSection: {
-    flex: 1,
+  settingsContent: {
+    gap: 10,
+    paddingBottom: 96
   },
-  tabBarContainer: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border.default,
+  title: {
+    color: "#f4f7fb",
+    fontSize: 22,
+    fontWeight: "700"
   },
-  tabBarScroll: {
-    flex: 1,
-  },
-  tabBar: {
-    flexDirection: 'row',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    paddingRight: spacing.md,
-    alignItems: 'center',
-  },
-  tab: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginRight: spacing.sm,
-    minWidth: 132,
-    maxWidth: 236,
-  },
-  tabActive: {
-    backgroundColor: colors.accent.primary + '30',
-    borderColor: colors.accent.primary,
-    borderWidth: 1,
-  },
-  tabContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  tabPlatformLogo: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    marginRight: spacing.xs,
-  },
-  tabText: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
-    marginRight: spacing.xs,
-    flexShrink: 1,
-    minWidth: 30,
-  },
-  tabTextActive: {
-    color: colors.text.primary,
-    fontWeight: typography.fontWeight.medium,
-  },
-  tabStatus: {
-    marginLeft: spacing.xs,
-  },
-  tabClose: {
-    marginLeft: spacing.xs,
-    padding: spacing.xs,
-  },
-  tabCloseText: {
-    color: colors.text.muted,
-    fontSize: typography.fontSize.lg,
-  },
-  tabActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingRight: spacing.sm,
-  },
-  tabActionButton: {
-    padding: spacing.sm,
-  },
-  tabActionIcon: {
-    fontSize: 18,
-  },
-  
-  // Add section
-  addSection: {
-    flex: 1,
-  },
-  addSectionContent: {
-    padding: spacing.lg,
+  subtitle: {
+    color: "#92a0b3",
+    fontSize: 12,
+    marginTop: 2
   },
   sectionTitle: {
-    fontSize: typography.fontSize.xxl,
-    fontWeight: typography.fontWeight.bold,
-    color: colors.text.primary,
-    marginBottom: spacing.lg,
+    color: "#d8e2f0",
+    fontSize: 13,
+    fontWeight: "700"
   },
-  platformSelector: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
+  sectionLabel: {
+    color: "#d8e2f0",
+    fontSize: 12,
+    fontWeight: "600",
+    marginTop: 4
   },
-  platformOption: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.lg,
-    paddingVertical: spacing.md,
-    borderWidth: 2,
-    borderColor: colors.border.default,
-  },
-  platformLogo: {
-    width: 24,
-    height: 24,
-    marginRight: spacing.sm,
-  },
-  platformLabel: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.medium,
-  },
-  channelInputContainer: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.xl,
-  },
-  channelInput: {
-    flex: 1,
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    fontSize: typography.fontSize.md,
-    color: colors.text.primary,
+  configCard: {
     borderWidth: 1,
-    borderColor: colors.border.default,
+    borderColor: "#1c2533",
+    borderRadius: 10,
+    backgroundColor: "#101722",
+    padding: 10,
+    gap: 8,
+    marginBottom: 10
   },
-  addButton: {
-    backgroundColor: colors.accent.primary,
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing.xl,
-    justifyContent: 'center',
-    ...shadows.md,
+  configHint: {
+    color: "#8395ad",
+    fontSize: 11
   },
-  addButtonDisabled: {
-    backgroundColor: colors.border.default,
+  accountRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
   },
-  addButtonText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.md,
-    fontWeight: typography.fontWeight.semibold,
-  },
-  activeChannels: {
-    marginTop: spacing.lg,
-  },
-  subsectionTitle: {
-    fontSize: typography.fontSize.lg,
-    fontWeight: typography.fontWeight.semibold,
-    color: colors.text.secondary,
-    marginBottom: spacing.md,
-  },
-  channelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.md,
-    padding: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  channelIndicator: {
-    width: 4,
-    height: 24,
-    borderRadius: 2,
-    marginRight: spacing.md,
-  },
-  channelName: {
+  accountCopy: {
     flex: 1,
-    color: colors.text.primary,
-    fontSize: typography.fontSize.md,
-    fontWeight: typography.fontWeight.medium,
+    gap: 2
   },
-  channelPlatform: {
-    color: colors.text.muted,
-    fontSize: typography.fontSize.sm,
-    marginRight: spacing.md,
+  accountLabel: {
+    color: "#c9d5e5",
+    fontSize: 12,
+    fontWeight: "700"
   },
-  mergeToggleButton: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+  accountValue: {
+    color: "#93a4bb",
+    fontSize: 12
+  },
+  addCard: {
     borderWidth: 1,
-    borderColor: colors.border.default,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: spacing.sm,
-    backgroundColor: colors.background.elevated,
+    borderColor: "#1c2533",
+    borderRadius: 10,
+    backgroundColor: "#101722",
+    padding: 10,
+    gap: 10
   },
-  mergeToggleButtonActive: {
-    borderColor: colors.accent.primary,
-    backgroundColor: colors.accent.primary + '22',
+  platformRow: {
+    flexDirection: "row",
+    gap: 8
   },
-  mergeToggleButtonText: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.semibold,
-    lineHeight: typography.fontSize.sm,
-  },
-  mergeToggleButtonTextActive: {
-    color: colors.text.primary,
-  },
-  removeButton: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  removeButtonText: {
-    color: colors.status.error,
-    fontSize: typography.fontSize.sm,
-  },
-  mergePanel: {
-    marginTop: spacing.md,
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.md,
+  platformPill: {
     borderWidth: 1,
-    borderColor: colors.border.default,
-    padding: spacing.md,
+    borderColor: "#2a3344",
+    borderRadius: 999,
+    paddingVertical: 5,
+    paddingHorizontal: 10
   },
-  mergeHint: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
-    marginBottom: spacing.sm,
+  platformPillActive: {
+    borderColor: "#2dd4bf",
+    backgroundColor: "#17353f"
   },
-  mergeActionButton: {
-    backgroundColor: colors.accent.primary,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: accessibility.minTouchTarget,
-    paddingVertical: spacing.sm,
+  platformPillText: {
+    color: "#9eb0c8",
+    fontSize: 12,
+    fontWeight: "600",
+    textTransform: "capitalize"
   },
-  mergeActionButtonDisabled: {
-    opacity: 0.45,
+  platformPillTextActive: {
+    color: "#d9fff7"
   },
-  mergeActionButtonText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.semibold,
+  addRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
   },
-  
-  // OBS section
-  obsSection: {
+  combineRow: {
+    flexDirection: "row",
+    justifyContent: "flex-start"
+  },
+  tabsStrip: {
+    marginTop: 10,
+    marginBottom: 8
+  },
+  tabsRow: {
+    flexDirection: "row",
+    gap: 8
+  },
+  tabCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: "#283346",
+    borderRadius: 10,
+    backgroundColor: "#121a27",
+    minWidth: 220
+  },
+  tabCardActive: {
+    borderColor: "#2dd4bf"
+  },
+  tabSelect: {
     flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 10
   },
-  obsSectionContent: {
-    padding: spacing.lg,
-    paddingBottom: spacing.xxxl,
+  tabTag: {
+    color: "#7fdff8",
+    fontSize: 11,
+    fontWeight: "700"
   },
-  obsSubtitle: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.md,
-    marginBottom: spacing.md,
+  tabLabel: {
+    color: "#dfe9f6",
+    fontSize: 13,
+    fontWeight: "600",
+    marginTop: 2
   },
-  obsConnectionCard: {
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    padding: spacing.md,
-    marginBottom: spacing.lg,
+  tabStatus: {
+    color: "#8ba1bb",
+    fontSize: 10,
+    marginTop: 2,
+    textTransform: "capitalize"
   },
-  obsSavedConnectionsScroll: {
-    marginBottom: spacing.md,
+  tabClose: {
+    paddingHorizontal: 10,
+    paddingVertical: 8
   },
-  obsSavedConnectionsRow: {
-    gap: spacing.md,
-    paddingBottom: spacing.xs,
-    paddingRight: spacing.sm,
+  tabCloseText: {
+    color: "#8ca3c1",
+    fontSize: 16,
+    fontWeight: "700"
   },
-  obsSavedConnectionCard: {
-    width: 290,
-    backgroundColor: '#081634',
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: '#152650',
-    padding: spacing.lg,
+  metaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 6
   },
-  obsSavedConnectionName: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.xxxl,
-    fontWeight: typography.fontWeight.bold,
-    textAlign: 'center',
+  metaText: {
+    color: "#8ea1b9",
+    fontSize: 12
   },
-  obsSavedConnectionHost: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.lg,
-    textAlign: 'center',
-    marginTop: spacing.xs,
-    marginBottom: spacing.md,
-  },
-  obsReachabilityRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    marginBottom: spacing.lg,
-  },
-  obsReachabilityDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-  },
-  obsReachabilityText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.xl,
-    fontWeight: typography.fontWeight.semibold,
-  },
-  obsSavedCardActions: {
-    flexDirection: 'row',
-    gap: spacing.md,
-  },
-  obsSavedCardConnectButton: {
+  messagesList: {
     flex: 1,
-    minHeight: accessibility.minTouchTarget,
-    borderRadius: borderRadius.md,
-    backgroundColor: '#ef5965',
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadows.sm,
-  },
-  obsSavedCardConnectButtonText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.xl,
-    fontWeight: typography.fontWeight.semibold,
-  },
-  obsSavedCardEditButton: {
-    flex: 1,
-    minHeight: accessibility.minTouchTarget,
-    borderRadius: borderRadius.md,
     borderWidth: 1,
-    borderColor: '#ef5965',
-    backgroundColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderColor: "#1f2938",
+    borderRadius: 10,
+    backgroundColor: "#0f1622"
   },
-  obsSavedCardEditButtonText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.xl,
-    fontWeight: typography.fontWeight.semibold,
+  messagesContent: {
+    padding: 10,
+    gap: 8
   },
-  obsConnectionRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  obsInput: {
-    backgroundColor: colors.background.secondary,
-    borderRadius: borderRadius.md,
+  messageCard: {
     borderWidth: 1,
-    borderColor: colors.border.default,
-    color: colors.text.primary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    fontSize: typography.fontSize.md,
-    marginBottom: spacing.sm,
+    borderColor: "#1f2a3a",
+    borderRadius: 8,
+    backgroundColor: "#0b1220",
+    padding: 8,
+    gap: 3
   },
-  obsHostInput: {
-    flex: 1,
+  messageMetaRow: {
+    flexDirection: "row",
+    justifyContent: "space-between"
   },
-  obsPortInput: {
+  messageMeta: {
+    color: "#8aa1bd",
+    fontSize: 11
+  },
+  messageAuthor: {
+    color: "#d5e4f7",
+    fontSize: 13,
+    fontWeight: "700"
+  },
+  messageText: {
+    color: "#edf3ff",
+    fontSize: 14
+  },
+  targetStrip: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 8,
+    marginBottom: 4
+  },
+  targetPill: {
+    borderWidth: 1,
+    borderColor: "#2a3344",
+    borderRadius: 999,
+    paddingVertical: 5,
+    paddingHorizontal: 10
+  },
+  targetPillActive: {
+    borderColor: "#38bdf8",
+    backgroundColor: "#163042"
+  },
+  targetPillText: {
+    color: "#9eb0c8",
+    fontSize: 11,
+    fontWeight: "600"
+  },
+  targetPillTextActive: {
+    color: "#d9f5ff"
+  },
+  composerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#253246",
+    borderRadius: 8,
+    backgroundColor: "#0f1622",
+    color: "#e5eefb",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 14
+  },
+  portInput: {
     width: 90,
+    borderWidth: 1,
+    borderColor: "#253246",
+    borderRadius: 8,
+    backgroundColor: "#0f1622",
+    color: "#e5eefb",
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 14
+  },
+  grow: {
+    flex: 1
+  },
+  obsCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: "#1f2938",
+    borderRadius: 10,
+    backgroundColor: "#101722",
+    padding: 10,
+    gap: 8
   },
   obsStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  obsStatusLabel: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
-  },
-  obsStatusValue: {
-    flex: 1,
-    textAlign: 'right',
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 8
   },
   obsActionsRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8
   },
-  obsPrimaryButton: {
-    flex: 1,
-    backgroundColor: colors.accent.primary,
-    borderRadius: borderRadius.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.sm,
-    minHeight: accessibility.minTouchTarget,
+  sceneStrip: {
+    flexDirection: "row",
+    gap: 8,
+    paddingVertical: 4
   },
-  obsPrimaryButtonDisabled: {
-    opacity: 0.6,
-  },
-  obsDangerButton: {
-    backgroundColor: colors.status.error,
-  },
-  obsPrimaryButtonText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.semibold,
-  },
-  obsSecondaryButton: {
-    flex: 1,
-    backgroundColor: colors.background.elevated,
-    borderRadius: borderRadius.md,
+  scenePill: {
     borderWidth: 1,
-    borderColor: colors.border.default,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.sm,
-    minHeight: accessibility.minTouchTarget,
+    borderColor: "#2a3344",
+    borderRadius: 999,
+    paddingVertical: 5,
+    paddingHorizontal: 10
   },
-  obsSecondaryButtonDisabled: {
-    opacity: 0.5,
+  scenePillActive: {
+    borderColor: "#34d399",
+    backgroundColor: "#163a31"
   },
-  obsSecondaryButtonText: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.medium,
-  },
-  obsTimeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  obsTimeText: {
-    flex: 1,
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
-  },
-  obsBlockTitle: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.lg,
-    fontWeight: typography.fontWeight.semibold,
-    marginTop: spacing.md,
-    marginBottom: spacing.sm,
-  },
-  obsSceneStrip: {
-    paddingBottom: spacing.xs,
-    gap: spacing.sm,
-  },
-  obsScenePill: {
-    backgroundColor: colors.background.card,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    borderRadius: borderRadius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    minHeight: accessibility.minTouchTarget,
-    justifyContent: 'center',
-  },
-  obsScenePillActive: {
-    borderColor: colors.accent.primary,
-    backgroundColor: colors.accent.primary + '22',
-  },
-  obsScenePillText: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.medium,
-  },
-  obsScenePillTextActive: {
-    color: colors.text.primary,
-  },
-  obsPreviewCard: {
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    padding: spacing.sm,
-    marginBottom: spacing.sm,
-    minHeight: 120,
-    justifyContent: 'center',
-  },
-  obsPreviewImage: {
-    width: '100%',
-    aspectRatio: 16 / 9,
-    borderRadius: borderRadius.md,
-    backgroundColor: colors.background.elevated,
-  },
-  obsListCard: {
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    padding: spacing.sm,
-    gap: spacing.sm,
-  },
-  obsListRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  obsListLabel: {
-    flex: 1,
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.medium,
-  },
-  obsListSubLabel: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xs,
-  },
-  obsMixerScroll: {
-    marginBottom: spacing.sm,
-  },
-  obsMixerStripRow: {
-    gap: spacing.sm,
-    paddingBottom: spacing.xs,
-  },
-  obsMixerStrip: {
-    width: 176,
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-    borderColor: colors.border.default,
-    padding: spacing.sm,
-    gap: spacing.sm,
-  },
-  obsMixerSourceName: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.md,
-    fontWeight: typography.fontWeight.semibold,
-  },
-  obsMixerDbValue: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.xl,
-    fontWeight: typography.fontWeight.medium,
-  },
-  obsMixerMetersRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: spacing.xs,
-    minHeight: OBS_MIXER_TRACK_HEIGHT,
-  },
-  obsMixerFaderTrack: {
-    width: 16,
-    height: OBS_MIXER_TRACK_HEIGHT,
-    borderRadius: 8,
-    backgroundColor: '#222b48',
-    position: 'relative',
-    overflow: 'hidden',
-  },
-  obsMixerFaderTrackDragging: {
-    borderWidth: 1,
-    borderColor: '#8da1ff',
-  },
-  obsMixerFaderFill: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: '#4b6fff',
-  },
-  obsMixerFaderThumb: {
-    position: 'absolute',
-    left: -3,
-    width: 22,
-    height: OBS_MIXER_THUMB_HEIGHT,
-    borderRadius: 11,
-    backgroundColor: '#f2f3f7',
-    borderWidth: 1,
-    borderColor: '#cfd3df',
-  },
-  obsMixerLevelTrack: {
-    width: 30,
-    height: OBS_MIXER_TRACK_HEIGHT,
-    borderRadius: borderRadius.sm,
-    backgroundColor: '#171d34',
-    overflow: 'hidden',
-    justifyContent: 'flex-end',
-    position: 'relative',
-  },
-  obsMixerLevelZones: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  obsMixerLevelZoneHigh: {
-    flex: 16,
-    backgroundColor: '#5f111f',
-  },
-  obsMixerLevelZoneMid: {
-    flex: 14,
-    backgroundColor: '#605115',
-  },
-  obsMixerLevelZoneLow: {
-    flex: 70,
-    backgroundColor: '#1d3f24',
-  },
-  obsMixerLevelFill: {
-    position: 'absolute',
-    left: 4,
-    right: 4,
-    bottom: 0,
-    borderRadius: 2,
-  },
-  obsMixerScaleCol: {
-    height: OBS_MIXER_TRACK_HEIGHT,
-    justifyContent: 'space-between',
-    paddingVertical: 1,
-  },
-  obsMixerScaleText: {
-    color: colors.text.secondary,
+  scenePillText: {
+    color: "#9eb0c8",
     fontSize: 11,
-    lineHeight: 12,
+    fontWeight: "600"
   },
-  obsMixerActionsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
+  scenePillTextActive: {
+    color: "#dcfff1"
   },
-  obsMixerMuteButton: {
-    flex: 1,
-    minHeight: accessibility.minTouchTarget,
-    borderRadius: borderRadius.md,
+  listBlock: {
     borderWidth: 1,
-    borderColor: colors.border.default,
-    backgroundColor: colors.background.elevated,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.sm,
+    borderColor: "#243040",
+    borderRadius: 8,
+    backgroundColor: "#0d1522",
+    padding: 8,
+    gap: 8
   },
-  obsMixerMuteButtonActive: {
-    backgroundColor: '#6f2b38',
-    borderColor: '#b84862',
+  listRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
   },
-  obsMixerMuteButtonText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.semibold,
+  listRowLabel: {
+    color: "#d5e4f7",
+    fontSize: 12,
+    fontWeight: "600",
+    flex: 1
   },
-  obsMixerGainButtons: {
-    flexDirection: 'row',
-    gap: spacing.xs,
-  },
-  obsMixerGainButton: {
-    width: 32,
-    height: 32,
-    borderRadius: borderRadius.sm,
+  audioRow: {
     borderWidth: 1,
-    borderColor: colors.border.default,
-    backgroundColor: colors.background.elevated,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderColor: "#243040",
+    borderRadius: 8,
+    backgroundColor: "#101a2a",
+    padding: 8,
+    gap: 8
   },
-  obsMixerGainButtonText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.lg,
-    fontWeight: typography.fontWeight.bold,
+  audioDetails: {
+    gap: 2
   },
-  obsHintText: {
-    color: colors.text.muted,
-    fontSize: typography.fontSize.sm,
-    marginBottom: spacing.sm,
+  audioActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    flexWrap: "wrap"
   },
-  obsStatsRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    backgroundColor: colors.background.card,
-    borderRadius: borderRadius.md,
+  statsRow: {
     borderWidth: 1,
-    borderColor: colors.border.default,
-    padding: spacing.md,
-    marginBottom: spacing.md,
+    borderColor: "#243040",
+    borderRadius: 8,
+    backgroundColor: "#0d1522",
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8
   },
-  obsStatText: {
-    flex: 1,
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
+  primaryButton: {
+    borderRadius: 8,
+    backgroundColor: "#186d60",
+    paddingHorizontal: 12,
+    paddingVertical: 9
   },
-  obsStatus: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.md,
-  },
-  qrModalContainer: {
-    flex: 1,
-    backgroundColor: colors.background.primary,
-    padding: spacing.lg,
-    gap: spacing.md,
-  },
-  qrModalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  qrModalTitle: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.xxl,
-    fontWeight: typography.fontWeight.bold,
-  },
-  qrModalCloseButton: {
-    borderRadius: borderRadius.md,
+  secondaryButton: {
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.border.default,
-    backgroundColor: colors.background.elevated,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    borderColor: "#2f3e56",
+    paddingHorizontal: 10,
+    paddingVertical: 8
   },
-  qrModalCloseButtonText: {
-    color: colors.text.primary,
-    fontSize: typography.fontSize.sm,
-    fontWeight: typography.fontWeight.semibold,
+  warningButton: {
+    borderRadius: 8,
+    backgroundColor: "#7a3b3b",
+    paddingHorizontal: 12,
+    paddingVertical: 9
   },
-  qrCameraFrame: {
+  primaryButtonDisabled: {
+    opacity: 0.45
+  },
+  primaryButtonText: {
+    color: "#f1fffc",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  secondaryButtonText: {
+    color: "#c9d7ea",
+    fontSize: 12,
+    fontWeight: "600"
+  },
+  emptyState: {
     flex: 1,
-    borderRadius: borderRadius.xl,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8
+  },
+  emptyTitle: {
+    color: "#d7e5f7",
+    fontSize: 18,
+    fontWeight: "700"
+  },
+  emptyText: {
+    color: "#8ea2b9",
+    fontSize: 13
+  },
+  noticeBar: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    bottom: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.border.default,
-    overflow: 'hidden',
-    backgroundColor: colors.background.card,
-    minHeight: 320,
+    borderColor: "#1e6f65",
+    backgroundColor: "#103b36",
+    paddingHorizontal: 10,
+    paddingVertical: 8
   },
-  qrCamera: {
-    flex: 1,
+  noticeText: {
+    color: "#d8fffa",
+    fontSize: 12
   },
-  qrCameraPlaceholder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: spacing.lg,
-  },
-  qrHintText: {
-    color: colors.text.secondary,
-    fontSize: typography.fontSize.sm,
-  },
-  
-  // Bottom navigation
   bottomNav: {
-    flexDirection: 'row',
-    backgroundColor: colors.background.secondary,
-    borderTopWidth: 1,
-    borderTopColor: colors.border.default,
-    paddingBottom: spacing.sm,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#1c2533",
+    borderRadius: 14,
+    backgroundColor: "#0f1624",
+    flexDirection: "row",
+    alignItems: "stretch",
+    padding: 4,
+    gap: 4
   },
-  navItem: {
+  bottomNavItem: {
     flex: 1,
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-    minHeight: accessibility.minTouchTarget,
+    minHeight: 54,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8
   },
-  navItemActive: {
-    backgroundColor: colors.background.elevated,
+  bottomNavItemActive: {
+    backgroundColor: "#1a2940"
   },
-  navIcon: {
-    fontSize: 20,
-    marginBottom: spacing.xs,
+  bottomNavIcon: {
+    color: "#8ea2b9",
+    fontSize: 16,
+    marginBottom: 2
   },
-  navLabel: {
-    fontSize: typography.fontSize.xs,
-    color: colors.text.muted,
+  bottomNavText: {
+    color: "#8ea2b9",
+    fontSize: 12,
+    fontWeight: "600"
   },
-  navLabelActive: {
-    color: colors.accent.primary,
-    fontWeight: typography.fontWeight.medium,
-  },
+  bottomNavTextActive: {
+    color: "#d9e8ff"
+  }
 });

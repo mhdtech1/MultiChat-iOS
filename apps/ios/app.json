@@ -15,9 +15,6 @@
     },
     "ios": {
       "supportsTablet": true,
-      "infoPlist": {
-        "NSCameraUsageDescription": "MultiChat uses the camera only to scan OBS connection QR codes."
-      },
       "bundleIdentifier": "com.mhdtech.multichatios"
     },
     "android": {
