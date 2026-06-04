@@ -41,7 +41,7 @@ The VM update script runs `corepack enable`, activates pnpm 9.12.3, `pnpm instal
 |------|---------|-------|
 | Install deps | `pnpm install` | Use corepack for pnpm 9.12.3 |
 | Build shared lib | `pnpm build:chat-core` | Required before iOS app imports chat-core |
-| Unit tests | `pnpm --filter @multichat/chat-core test` | Vitest; 6 IRC parser tests, no external services |
+| Unit tests | `pnpm --filter @multichat/chat-core test` | Vitest; 47 tests across adapters/parsers (mocked), no external services |
 | Live chat adapter smoke test | `pnpm dlx tsx /tmp/twitch-demo.ts` | See demo script below; needs outbound internet |
 | Expo Metro bundler | `cd apps/ios && CI=1 pnpm exec expo start --port 8081` | Bundler starts and serves JS successfully |
 
