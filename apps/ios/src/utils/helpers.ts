@@ -184,10 +184,16 @@ export const parseSevenTvEmoteMap = (value: unknown): Record<string, string> => 
   for (const entry of emoteArray) {
     const record = asRecord(entry);
     if (!record) continue;
-    const id = typeof record.id === 'string' ? record.id.trim() : '';
+    const data = asRecord(record.data);
+    const id =
+      typeof record.id === 'string'
+        ? record.id.trim()
+        : typeof data?.id === 'string'
+          ? data.id.trim()
+          : '';
     const name = typeof record.name === 'string' ? record.name.trim() : '';
     if (!id || !name) continue;
-    next[name] = `https://lh3.googleusercontent.com/IM4kB0ErJr5JVFEtuI91cQzM2baf5n1GeSSZqjTh8QYAkTrOD80O5Ag6_b1hyViqDQkg-G2BGGCej3sIDTKezeyaaw=s1280-w1280-h800`;
+    next[name] = `https://cdn.7tv.app/emote/${id}/2x.webp`;
   }
   return next;
 };
