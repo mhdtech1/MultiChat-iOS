@@ -187,6 +187,7 @@ export const normalizePersistedAppState = (value: unknown): PersistedAppStateV1 
         ? record.youtubeTokenExpiry
         : 0,
     youtubeUsername: typeof record.youtubeUsername === 'string' ? record.youtubeUsername : '',
+    youtubeApiKey: typeof record.youtubeApiKey === 'string' ? record.youtubeApiKey : '',
     obsHost: typeof record.obsHost === 'string' && record.obsHost.trim() ? record.obsHost.trim() : '127.0.0.1',
     obsPort: typeof record.obsPort === 'string' && record.obsPort.trim() ? record.obsPort.trim() : '4455',
     obsPassword: typeof record.obsPassword === 'string' ? record.obsPassword : '',

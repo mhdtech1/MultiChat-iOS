@@ -32,7 +32,6 @@ import { platformTag, statusLabel } from '../utils/helpers';
 function AppShell() {
   const { state, dispatch, actions } = useApp();
   const [notice, setNotice] = useState<string | null>(null);
-  const [youtubeApiKey, setYoutubeApiKey] = useState('');
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourcesReconnectedRef = useRef(false);
 
@@ -102,7 +101,7 @@ function AppShell() {
     tabs: state.tabs,
     activeTabId: state.activeTabId,
     credentials,
-    youtubeApiKey,
+    youtubeApiKey: state.youtubeApiKey,
     onSourcesChange: setSources,
     onTabsChange: setTabs,
     onActiveTabChange: (tabId) => dispatch({ type: 'SET_ACTIVE_TAB', payload: tabId }),
@@ -416,8 +415,8 @@ function AppShell() {
             <View style={styles.youtubeKeyCard}>
               <Text style={styles.sectionTitle}>YouTube API key (read-only)</Text>
               <TextInput
-                value={youtubeApiKey}
-                onChangeText={setYoutubeApiKey}
+                value={state.youtubeApiKey}
+                onChangeText={(value) => dispatch({ type: 'SET_YOUTUBE_API_KEY', payload: value })}
                 placeholder="YouTube Data API key"
                 placeholderTextColor={colors.text.muted}
                 autoCapitalize="none"

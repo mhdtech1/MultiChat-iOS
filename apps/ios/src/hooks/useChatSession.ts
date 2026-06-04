@@ -117,6 +117,25 @@ export function useChatSession({
       adapter.onMessage((message) => {
         setMessagesBySource((previous) => {
           const current = previous[sourceId] ?? [];
+          const last = current[current.length - 1];
+          const incomingRaw = message.raw as Record<string, unknown> | undefined;
+          const lastRaw = last?.raw as Record<string, unknown> | undefined;
+
+          // Replace optimistic local echo when the server message arrives (Kick/Twitch send).
+          if (last && lastRaw?.localEcho === true && incomingRaw?.localEcho !== true) {
+            const sameAuthor =
+              last.username.toLowerCase() === message.username.toLowerCase() ||
+              (last.displayName || '').toLowerCase() === (message.displayName || '').toLowerCase();
+            const sameText = last.message.trim() === message.message.trim();
+            if (sameAuthor && sameText) {
+              const next = [...current.slice(0, -1), message];
+              if (next.length > MESSAGE_BUFFER_SIZE) {
+                next.splice(0, next.length - MESSAGE_BUFFER_SIZE);
+              }
+              return { ...previous, [sourceId]: next };
+            }
+          }
+
           const next = [...current, message];
           if (next.length > MESSAGE_BUFFER_SIZE) {
             next.splice(0, next.length - MESSAGE_BUFFER_SIZE);
