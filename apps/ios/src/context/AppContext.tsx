@@ -17,6 +17,7 @@ import type {
 } from '../types';
 import { loadAppState, saveAppState } from '../utils/storage';
 import { makeId } from '../utils/helpers';
+import { normalizeChannelInput } from '../utils/channelInput';
 
 // State type
 interface AppState {
@@ -410,17 +411,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Add a channel
   const addChannel = useCallback((platform: PlatformId, channel: string) => {
+    const normalizedChannel = normalizeChannelInput(platform, channel);
+    if (!normalizedChannel) return;
     const sourceId = makeId();
     const tabId = makeId();
     
     dispatch({
       type: 'ADD_SOURCE',
-      payload: { id: sourceId, platform, channel: channel.toLowerCase() },
+      payload: { id: sourceId, platform, channel: normalizedChannel },
     });
     
     dispatch({
       type: 'ADD_TAB',
-      payload: { id: tabId, sourceIds: [sourceId], label: `${platform}/${channel}` },
+      payload: { id: tabId, sourceIds: [sourceId], label: `${platform}/${normalizedChannel}` },
     });
     
     dispatch({ type: 'SET_ACTIVE_TAB', payload: tabId });

@@ -121,6 +121,12 @@ const readKickTargetUsername = (payload: Record<string, unknown>): string => {
     if (!nested) continue;
     const nestedUsername = readFirstString(nested, ["username", "slug", "login", "display_name", "displayName", "name"]);
     if (nestedUsername) return nestedUsername;
+    for (const nestedUserKey of ["user", "sender", "target_user"]) {
+      const nestedUser = asRecord(nested[nestedUserKey]);
+      if (!nestedUser) continue;
+      const nestedUserName = readFirstString(nestedUser, ["username", "slug", "login", "display_name", "displayName", "name"]);
+      if (nestedUserName) return nestedUserName;
+    }
   }
   return "";
 };

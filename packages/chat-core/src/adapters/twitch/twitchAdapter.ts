@@ -2,7 +2,7 @@ import EventEmitter from "eventemitter3";
 import type { ChatAdapter, ChatAdapterOptions, ChatAdapterStatus, ChatMessage } from "../../types";
 import { generateSecureRandomHex, generateSecureRandomInt } from "../../utils/crypto";
 import { parseIrcMessage } from "./ircParser";
-import { normalizeTwitchMessage } from "./normalize";
+import { normalizeTwitchMessage, parseTwitchBadges } from "./normalize";
 
 export type TwitchAuth = {
   token?: string;
@@ -78,6 +78,7 @@ export class TwitchAdapter implements ChatAdapter {
           const username = this.auth.username || parsed.tags["display-name"] || "twitch-user";
           const displayName = parsed.tags["display-name"] || username;
           const badges = parsed.tags.badges ? parsed.tags.badges.split(",").filter(Boolean) : [];
+          const parsedBadges = parseTwitchBadges(badges, parsed.tags.badges);
           this.selfBadges = badges;
           this.selfColor = parsed.tags.color || undefined;
           this.selfDisplayName = displayName;
@@ -93,6 +94,7 @@ export class TwitchAdapter implements ChatAdapter {
             color: this.selfColor,
             raw: {
               ...parsed.tags,
+              parsedBadges,
               selfRoleState: true,
               hidden: true
             }
@@ -186,7 +188,10 @@ export class TwitchAdapter implements ChatAdapter {
       timestamp: new Date().toISOString(),
       badges: [...this.selfBadges],
       color: this.selfColor,
-      raw: { localEcho: true }
+      raw: {
+        localEcho: true,
+        parsedBadges: parseTwitchBadges(this.selfBadges)
+      }
     } satisfies ChatMessage);
   }
 }

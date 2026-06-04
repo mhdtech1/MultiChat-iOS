@@ -3,11 +3,9 @@ import * as AuthSession from 'expo-auth-session';
 import * as WebBrowser from 'expo-web-browser';
 import {
   KICK_CLIENT_ID,
-  KICK_CLIENT_SECRET,
-  KICK_REDIRECT_URI,
   KICK_SCOPES,
+  KICK_TOKEN_BROKER_EXCHANGE_URL,
   TWITCH_CLIENT_ID,
-  TWITCH_REDIRECT_URI,
   TWITCH_SCOPES,
 } from '../constants/config';
 import { createCodeChallenge, parseKickUserName, randomToken } from '../utils/helpers';
@@ -127,6 +125,11 @@ export function usePlatformAuth(showNotice: (message: string) => void) {
       if (authBusy) return;
       setAuthBusy('kick');
       try {
+        const brokerExchangeUrl = KICK_TOKEN_BROKER_EXCHANGE_URL.trim();
+        if (!brokerExchangeUrl) {
+          throw new Error('Kick sign-in requires a token broker. Configure KICK_TOKEN_BROKER_EXCHANGE_URL before enabling Kick OAuth.');
+        }
+
         const state = randomToken();
         const codeVerifier = randomToken().repeat(2).replace(/[^a-zA-Z0-9]/g, '').slice(0, 64);
         const codeChallenge = await createCodeChallenge(codeVerifier);
@@ -156,22 +159,20 @@ export function usePlatformAuth(showNotice: (message: string) => void) {
           throw new Error('Kick did not return an authorization code.');
         }
 
-        const tokenResponse = await fetch('https://id.kick.com/oauth/token', {
+        const tokenResponse = await fetch(brokerExchangeUrl, {
           method: 'POST',
           headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
+            'Content-Type': 'application/json',
             Accept: 'application/json',
           },
-          body: new URLSearchParams({
+          body: JSON.stringify({
             code,
-            client_id: KICK_CLIENT_ID,
-            client_secret: KICK_CLIENT_SECRET,
-            redirect_uri: kickRedirectUri,
-            grant_type: 'authorization_code',
-            code_verifier: codeVerifier,
+            clientId: KICK_CLIENT_ID,
+            redirectUri: kickRedirectUri,
+            codeVerifier,
           }),
         });
-        const tokens = await fetchJsonOrThrow<KickTokenResponse>(tokenResponse, 'Kick token exchange');
+        const tokens = await fetchJsonOrThrow<KickTokenResponse>(tokenResponse, 'Kick broker token exchange');
         const accessToken = tokens.access_token?.trim() ?? '';
         if (!accessToken) {
           throw new Error('Kick token exchange did not return an access token.');
