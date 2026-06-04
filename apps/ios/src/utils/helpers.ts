@@ -13,6 +13,26 @@ export const randomToken = () => `${Crypto.randomUUID().replace(/-/g, '')}${Date
 export const toBase64Url = (value: string) =>
   value.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 
+export const createCodeChallenge = async (codeVerifier: string) => {
+  const digest = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, codeVerifier, {
+    encoding: Crypto.CryptoEncoding.BASE64,
+  });
+  return toBase64Url(digest);
+};
+
+export const parseKickUserName = (response: unknown): string | undefined => {
+  if (!response || typeof response !== 'object') return undefined;
+  const maybeData = (response as { data?: unknown }).data;
+  const user = Array.isArray(maybeData) ? maybeData[0] : maybeData;
+  if (!user || typeof user !== 'object') return undefined;
+
+  const record = user as Record<string, unknown>;
+  if (typeof record.username === 'string' && record.username.length > 0) return record.username;
+  if (typeof record.name === 'string' && record.name.length > 0) return record.name;
+  if (typeof record.slug === 'string' && record.slug.length > 0) return record.slug;
+  return undefined;
+};
+
 export const asRecord = (value: unknown): Record<string, unknown> | null => {
   if (!value || typeof value !== 'object') return null;
   return value as Record<string, unknown>;

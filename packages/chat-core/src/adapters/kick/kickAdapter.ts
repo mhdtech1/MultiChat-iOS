@@ -1,5 +1,6 @@
 import EventEmitter from "eventemitter3";
 import type { ChatAdapter, ChatAdapterOptions, ChatAdapterStatus, ChatMessage } from "../../types";
+import { generateSecureRandomHex } from "../../utils/crypto";
 
 export type KickAuth = {
   accessToken?: string;
@@ -120,6 +121,12 @@ const readKickTargetUsername = (payload: Record<string, unknown>): string => {
     if (!nested) continue;
     const nestedUsername = readFirstString(nested, ["username", "slug", "login", "display_name", "displayName", "name"]);
     if (nestedUsername) return nestedUsername;
+    for (const nestedUserKey of ["user", "sender", "target_user"]) {
+      const nestedUser = asRecord(nested[nestedUserKey]);
+      if (!nestedUser) continue;
+      const nestedUserName = readFirstString(nestedUser, ["username", "slug", "login", "display_name", "displayName", "name"]);
+      if (nestedUserName) return nestedUserName;
+    }
   }
   return "";
 };
@@ -231,6 +238,20 @@ export class KickAdapter implements ChatAdapter {
   private setStatus(status: ChatAdapterStatus) {
     this.status = status;
     this.emitter.emit("status", status);
+  }
+
+  private emitLocalEcho(content: string) {
+    const username = this.auth.username?.trim() || "you";
+    this.emitter.emit("message", {
+      id: `local-${Date.now()}-${generateSecureRandomHex(4)}`,
+      platform: "kick",
+      channel: this.channel,
+      username,
+      displayName: username,
+      message: content,
+      timestamp: new Date().toISOString(),
+      raw: { localEcho: true },
+    } satisfies ChatMessage);
   }
 
   private extractChatroomId(payload: unknown): number | null {
@@ -373,7 +394,7 @@ export class KickAdapter implements ChatAdapter {
     }
 
     return {
-      id: `event-${eventKind}-${targetMessageId || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: `event-${eventKind}-${targetMessageId || Date.now()}-${generateSecureRandomHex(4)}`,
       platform: "kick",
       channel: this.channel,
       username: "system",
@@ -482,6 +503,17 @@ export class KickAdapter implements ChatAdapter {
     }
 
     await this.connectSocketOnly();
+    this.warmBroadcasterUserId();
+  }
+
+  private warmBroadcasterUserId() {
+    if (this.auth.guest || this.broadcasterUserId) return;
+    void this.ensureAccessToken()
+      .then((token) => this.resolveBroadcasterUserIdWithToken(token))
+      .catch((error) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.logger?.(`Kick broadcaster ID prefetch failed: ${detail}`);
+      });
   }
 
   async disconnect() {
@@ -497,7 +529,7 @@ export class KickAdapter implements ChatAdapter {
     }
   }
 
-  private async resolveBroadcasterUserId(): Promise<number> {
+  private async resolveBroadcasterUserIdWithToken(token: string): Promise<number> {
     if (this.broadcasterUserId) {
       return this.broadcasterUserId;
     }
@@ -506,7 +538,6 @@ export class KickAdapter implements ChatAdapter {
       throw new Error("Kick send requires a signed-in account.");
     }
 
-    let token = await this.ensureAccessToken();
     const params = new URLSearchParams();
     params.append("slug", this.channel);
 
@@ -531,7 +562,6 @@ export class KickAdapter implements ChatAdapter {
 
     let broadcasterUserId = response.ok && payload ? this.extractBroadcasterUserId(payload) : null;
     if (!broadcasterUserId) {
-      // Fallback to public website channel payload when API auth is restricted.
       const fallback = await fetch(`https://kick.com/api/v2/channels/${encodeURIComponent(this.channel)}`, {
         headers: {
           Accept: "application/json, text/plain, */*"
@@ -550,6 +580,11 @@ export class KickAdapter implements ChatAdapter {
     return broadcasterUserId;
   }
 
+  private async resolveBroadcasterUserId(): Promise<number> {
+    const token = await this.ensureAccessToken();
+    return this.resolveBroadcasterUserIdWithToken(token);
+  }
+
   async sendMessage(message: string) {
     const content = message.trim();
     if (!content) return;
@@ -561,8 +596,13 @@ export class KickAdapter implements ChatAdapter {
       throw new Error("Kick send requires a signed-in account.");
     }
 
-    let token = await this.ensureAccessToken();
-    const broadcasterUserId = await this.resolveBroadcasterUserId();
+    const tokenPromise = this.ensureAccessToken();
+    const broadcasterUserIdPromise = tokenPromise.then((token) => this.resolveBroadcasterUserIdWithToken(token));
+
+    this.emitLocalEcho(content);
+
+    let token = await tokenPromise;
+    const broadcasterUserId = await broadcasterUserIdPromise;
     let response = await fetch("https://api.kick.com/public/v1/chat", {
       method: "POST",
       headers: {
