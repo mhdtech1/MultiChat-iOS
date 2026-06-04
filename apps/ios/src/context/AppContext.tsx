@@ -17,6 +17,7 @@ import type {
 } from '../types';
 import { loadAppState, saveAppState } from '../utils/storage';
 import { makeId } from '../utils/helpers';
+import { normalizeChannelInput } from '../utils/channelInput';
 
 // State type
 interface AppState {
@@ -49,6 +50,7 @@ interface AppState {
   youtubeRefreshToken: string;
   youtubeTokenExpiry: number;
   youtubeUsername: string;
+  youtubeApiKey: string;
   
   // OBS
   obsHost: string;
@@ -91,6 +93,7 @@ type AppAction =
   | { type: 'SET_TWITCH_CREDENTIALS'; payload: { username: string; token: string } }
   | { type: 'SET_KICK_CREDENTIALS'; payload: { username: string; token: string; refreshToken: string } }
   | { type: 'SET_YOUTUBE_CREDENTIALS'; payload: { username: string; accessToken: string; refreshToken: string; expiry: number } }
+  | { type: 'SET_YOUTUBE_API_KEY'; payload: string }
   | { type: 'CLEAR_TWITCH_CREDENTIALS' }
   | { type: 'CLEAR_KICK_CREDENTIALS' }
   | { type: 'CLEAR_YOUTUBE_CREDENTIALS' }
@@ -147,6 +150,7 @@ const initialState: AppState = {
   youtubeRefreshToken: '',
   youtubeTokenExpiry: 0,
   youtubeUsername: '',
+  youtubeApiKey: '',
   obsHost: '127.0.0.1',
   obsPort: '4455',
   obsPassword: '',
@@ -235,6 +239,9 @@ function appReducer(state: AppState, action: AppAction): AppState {
         youtubeRefreshToken: action.payload.refreshToken,
         youtubeTokenExpiry: action.payload.expiry,
       };
+
+    case 'SET_YOUTUBE_API_KEY':
+      return { ...state, youtubeApiKey: action.payload };
     
     case 'CLEAR_TWITCH_CREDENTIALS':
       return { ...state, twitchUsername: '', twitchToken: '' };
@@ -338,6 +345,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             youtubeRefreshToken: savedState.youtubeRefreshToken,
             youtubeTokenExpiry: savedState.youtubeTokenExpiry,
             youtubeUsername: savedState.youtubeUsername,
+            youtubeApiKey: savedState.youtubeApiKey,
             obsHost: savedState.obsHost,
             obsPort: savedState.obsPort,
             obsPassword: savedState.obsPassword,
@@ -377,6 +385,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         youtubeRefreshToken: state.youtubeRefreshToken,
         youtubeTokenExpiry: state.youtubeTokenExpiry,
         youtubeUsername: state.youtubeUsername,
+        youtubeApiKey: state.youtubeApiKey,
         obsHost: state.obsHost,
         obsPort: state.obsPort,
         obsPassword: state.obsPassword,
@@ -402,17 +411,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // Add a channel
   const addChannel = useCallback((platform: PlatformId, channel: string) => {
+    const normalizedChannel = normalizeChannelInput(platform, channel);
+    if (!normalizedChannel) return;
     const sourceId = makeId();
     const tabId = makeId();
     
     dispatch({
       type: 'ADD_SOURCE',
-      payload: { id: sourceId, platform, channel: channel.toLowerCase() },
+      payload: { id: sourceId, platform, channel: normalizedChannel },
     });
     
     dispatch({
       type: 'ADD_TAB',
-      payload: { id: tabId, sourceIds: [sourceId], label: `${platform}/${channel}` },
+      payload: { id: tabId, sourceIds: [sourceId], label: `${platform}/${normalizedChannel}` },
     });
     
     dispatch({ type: 'SET_ACTIVE_TAB', payload: tabId });

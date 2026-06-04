@@ -8,9 +8,12 @@ export const PLATFORM_OPTIONS: PlatformId[] = ['twitch', 'kick', 'youtube'];
 
 export const TWITCH_CLIENT_ID = 'syeui9mom7i5f9060j03tydgpdywbh';
 export const KICK_CLIENT_ID = '01KGRFF03VYRJMB3W4369Y07CS';
-export const KICK_CLIENT_SECRET = '29f43591eb0496352c66ea36f55c5c21e3fbc5053ba22568194e0c950c174794';
 export const TWITCH_REDIRECT_URI = 'multichat://oauth/twitch';
 export const KICK_REDIRECT_URI = 'multichat://oauth/kick';
+// Kick still requires a client secret for token exchange. Keep that secret in a
+// broker service and set this to the broker's /kick/exchange endpoint only after
+// the mobile redirect URI has been allowlisted by the broker.
+export const KICK_TOKEN_BROKER_EXCHANGE_URL = '';
 export const YOUTUBE_CLIENT_ID = '1008732662207-rufcsa7rafob02h29docduk7pboim0s8.apps.googleusercontent.com';
 // Google OAuth native redirects typically require a dotted custom scheme.
 export const YOUTUBE_REDIRECT_URI = 'com.mhdtech.multichatios:/oauth/youtube';

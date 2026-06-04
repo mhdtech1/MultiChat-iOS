@@ -1,7 +1,7 @@
 import EventEmitter from "eventemitter3";
 import type { ChatAdapter, ChatAdapterOptions, ChatAdapterStatus, ChatMessage } from "../../types";
 
-type TikTokTransportEvent = {
+export type TikTokTransportEvent = {
   connectionId: string;
   type: "connected" | "disconnected" | "chat" | "error";
   roomId?: string;

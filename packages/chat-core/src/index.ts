@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./utils/crypto";
 export * from "./adapters/twitch/twitchAdapter";
 export * from "./adapters/kick/kickAdapter";
 export * from "./adapters/youtube/youtubeAdapter";

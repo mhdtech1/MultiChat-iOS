@@ -1,5 +1,35 @@
 import type { ChatMessage } from "../../types";
+import { generateSecureRandomHex } from "../../utils/crypto";
 import type { IrcMessage } from "./ircParser";
+
+export const parseTwitchBadges = (
+  badgesArray: string[],
+  rawBadgesString?: string
+): { setId: string; versionId: string; key: string }[] => {
+  const map = new Map<string, { setId: string; versionId: string; key: string }>();
+
+  const add = (badge: string) => {
+    if (typeof badge !== "string") return;
+    const [rawSetId, rawVersionId] = badge.split("/", 2);
+    const setId = (rawSetId ?? "").trim().toLowerCase();
+    const versionId = (rawVersionId ?? "").trim();
+    if (!setId || !versionId) return;
+    const key = `${setId}/${versionId}`;
+    if (!map.has(key)) {
+      map.set(key, { setId, versionId, key });
+    }
+  };
+
+  if (Array.isArray(badgesArray)) {
+    for (const badge of badgesArray) add(badge);
+  }
+
+  if (typeof rawBadgesString === "string") {
+    for (const badge of rawBadgesString.split(",")) add(badge);
+  }
+
+  return Array.from(map.values());
+};
 
 const unescapeIrcTagValue = (value: string) =>
   value
@@ -16,7 +46,7 @@ const buildSystemMessage = (
   extraRaw: Record<string, unknown>
 ): ChatMessage => {
   const channel = message.params[0]?.replace("#", "") ?? "";
-  const suffix = Math.random().toString(36).slice(2, 8);
+  const suffix = generateSecureRandomHex(4);
   const baseId = message.tags.id || message.tags["target-msg-id"] || `${timestampMs}`;
   return {
     id: `event-${baseId}-${suffix}`,
@@ -53,7 +83,10 @@ export const normalizeTwitchMessage = (message: IrcMessage): ChatMessage | null 
       timestamp: new Date(timestampMs).toISOString(),
       badges,
       color: message.tags.color || undefined,
-      raw: message.tags
+      raw: {
+        ...message.tags,
+        parsedBadges: parseTwitchBadges(badges, message.tags.badges),
+      },
     };
   }
 
@@ -75,9 +108,10 @@ export const normalizeTwitchMessage = (message: IrcMessage): ChatMessage | null 
       color: message.tags.color || undefined,
       raw: {
         ...message.tags,
+        parsedBadges: parseTwitchBadges(badges, message.tags.badges),
         eventType: "usernotice",
-        msgId: message.tags["msg-id"] || undefined
-      }
+        msgId: message.tags["msg-id"] || undefined,
+      },
     };
   }
 

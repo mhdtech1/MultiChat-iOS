@@ -162,6 +162,7 @@ export type PersistedAppStateV1 = {
   youtubeRefreshToken: string;
   youtubeTokenExpiry: number;
   youtubeUsername: string;
+  youtubeApiKey: string;
   obsHost: string;
   obsPort: string;
   obsPassword: string;

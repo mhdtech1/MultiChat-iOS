@@ -1,7 +1,8 @@
 import EventEmitter from "eventemitter3";
 import type { ChatAdapter, ChatAdapterOptions, ChatAdapterStatus, ChatMessage } from "../../types";
+import { generateSecureRandomHex, generateSecureRandomInt } from "../../utils/crypto";
 import { parseIrcMessage } from "./ircParser";
-import { normalizeTwitchMessage } from "./normalize";
+import { normalizeTwitchMessage, parseTwitchBadges } from "./normalize";
 
 export type TwitchAuth = {
   token?: string;
@@ -56,7 +57,7 @@ export class TwitchAdapter implements ChatAdapter {
       this.setStatus("connected");
       socket.send("CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership");
       const token = this.auth.token ? `oauth:${this.auth.token.replace(/^oauth:/, "")}` : "SCHMOOPIIE";
-      const nick = this.auth.username || `justinfan${Math.floor(Math.random() * 100000)}`;
+      const nick = this.auth.username || `justinfan${generateSecureRandomInt(100000)}`;
       socket.send(`PASS ${token}`);
       socket.send(`NICK ${nick}`);
       this.queueJoin(this.channel);
@@ -77,11 +78,12 @@ export class TwitchAdapter implements ChatAdapter {
           const username = this.auth.username || parsed.tags["display-name"] || "twitch-user";
           const displayName = parsed.tags["display-name"] || username;
           const badges = parsed.tags.badges ? parsed.tags.badges.split(",").filter(Boolean) : [];
+          const parsedBadges = parseTwitchBadges(badges, parsed.tags.badges);
           this.selfBadges = badges;
           this.selfColor = parsed.tags.color || undefined;
           this.selfDisplayName = displayName;
           this.emitter.emit("message", {
-            id: `selfstate-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            id: `selfstate-${Date.now()}-${generateSecureRandomHex(4)}`,
             platform: "twitch",
             channel,
             username,
@@ -92,6 +94,7 @@ export class TwitchAdapter implements ChatAdapter {
             color: this.selfColor,
             raw: {
               ...parsed.tags,
+              parsedBadges,
               selfRoleState: true,
               hidden: true
             }
@@ -176,7 +179,7 @@ export class TwitchAdapter implements ChatAdapter {
 
     // Local echo so sent messages show immediately even if Twitch does not echo PRIVMSG back.
     this.emitter.emit("message", {
-      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: `local-${Date.now()}-${generateSecureRandomHex(4)}`,
       platform: "twitch",
       channel: this.channel,
       username: this.auth.username,
@@ -185,7 +188,10 @@ export class TwitchAdapter implements ChatAdapter {
       timestamp: new Date().toISOString(),
       badges: [...this.selfBadges],
       color: this.selfColor,
-      raw: { localEcho: true }
+      raw: {
+        localEcho: true,
+        parsedBadges: parseTwitchBadges(this.selfBadges)
+      }
     } satisfies ChatMessage);
   }
 }
