@@ -17,6 +17,9 @@ import {
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import type { ChatAdapter, ChatAdapterStatus, ChatMessage } from "@multichat/chat-core";
 import { KickAdapter, TwitchAdapter, YouTubeAdapter } from "@multichat/chat-core";
+import { MessageRow } from "./src/components/chat/MessageRow";
+import { fetchGlobalEmotes, type EmoteMap } from "./src/services/emotes";
+import { fetchTwitchGlobalBadges, type BadgeMap } from "./src/services/badges";
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -110,15 +113,6 @@ const normalizeChannelInput = (platform: PlatformId, input: string) => {
     return trimmed;
   }
   return trimmed.toLowerCase();
-};
-
-const formatClock = (timestamp: string) => {
-  const value = Date.parse(timestamp);
-  if (Number.isNaN(value)) return "--:--";
-  return new Date(value).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
 };
 
 const messageTimestamp = (message: ChatMessage) => {
@@ -246,6 +240,9 @@ export default function App() {
   const [youtubeApiKey, setYoutubeApiKey] = useState("");
 
   const [sendTargetId, setSendTargetId] = useState<ObsSendTarget>(OBS_ALL_SEND_TARGET);
+
+  const [emoteMap, setEmoteMap] = useState<EmoteMap>({});
+  const [twitchBadgeMap, setTwitchBadgeMap] = useState<BadgeMap>({});
 
   const [mobileSection, setMobileSection] = useState<MobileSection>("chats");
   const [busy, setBusy] = useState(false);
@@ -1268,6 +1265,26 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const [emotes, badges] = await Promise.all([
+        fetchGlobalEmotes(),
+        fetchTwitchGlobalBadges()
+      ]);
+      if (cancelled) return;
+      if (Object.keys(emotes).length > 0) {
+        setEmoteMap(emotes);
+      }
+      if (Object.keys(badges).length > 0) {
+        setTwitchBadgeMap(badges);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!activeChatTab) {
       setSendTargetId(OBS_ALL_SEND_TARGET);
       return;
@@ -1328,16 +1345,7 @@ export default function App() {
           style={styles.messagesList}
           contentContainerStyle={styles.messagesContent}
           renderItem={({ item }) => (
-            <View style={styles.messageCard}>
-              <View style={styles.messageMetaRow}>
-                <Text style={styles.messageMeta}>
-                  {platformTag(item.platform as PlatformId)} #{item.channel}
-                </Text>
-                <Text style={styles.messageMeta}>{formatClock(item.timestamp)}</Text>
-              </View>
-              <Text style={styles.messageAuthor}>{item.displayName || item.username}</Text>
-              <Text style={styles.messageText}>{item.message}</Text>
-            </View>
+            <MessageRow message={item} emoteMap={emoteMap} twitchBadgeMap={twitchBadgeMap} />
           )}
           ListEmptyComponent={<Text style={styles.emptyText}>No messages yet for this tab.</Text>}
         />
@@ -1895,31 +1903,6 @@ const styles = StyleSheet.create({
   messagesContent: {
     padding: 10,
     gap: 8
-  },
-  messageCard: {
-    borderWidth: 1,
-    borderColor: "#1f2a3a",
-    borderRadius: 8,
-    backgroundColor: "#0b1220",
-    padding: 8,
-    gap: 3
-  },
-  messageMetaRow: {
-    flexDirection: "row",
-    justifyContent: "space-between"
-  },
-  messageMeta: {
-    color: "#8aa1bd",
-    fontSize: 11
-  },
-  messageAuthor: {
-    color: "#d5e4f7",
-    fontSize: 13,
-    fontWeight: "700"
-  },
-  messageText: {
-    color: "#edf3ff",
-    fontSize: 14
   },
   targetStrip: {
     flexDirection: "row",
