@@ -4,7 +4,6 @@ import { parseTwitchBadgeMap } from '../utils/helpers';
 
 export function useGlobalBadgeMap() {
   const [badgeMap, setBadgeMap] = useState<Record<string, string>>({});
-  const [emoteMap] = useState<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -24,5 +23,5 @@ export function useGlobalBadgeMap() {
     };
   }, []);
 
-  return { badgeMap, emoteMap };
+  return { badgeMap };
 }

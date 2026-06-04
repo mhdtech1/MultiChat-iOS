@@ -17,6 +17,7 @@ import type {
 } from '../types';
 import { loadAppState, saveAppState } from '../utils/storage';
 import { makeId } from '../utils/helpers';
+import { normalizeChannelInput } from '../utils/channelInput';
 
 // State type
 interface AppState {
@@ -80,6 +81,7 @@ type AppAction =
   | { type: 'INITIALIZE'; payload: Partial<AppState> }
   | { type: 'SET_LOADING'; payload: boolean }
   | { type: 'COMPLETE_ONBOARDING' }
+  | { type: 'RESET_ONBOARDING' }
   | { type: 'SET_MOBILE_SECTION'; payload: MobileSection }
   | { type: 'SET_PLATFORM_INPUT'; payload: PlatformId }
   | { type: 'SET_CHANNEL_INPUT'; payload: string }
@@ -174,6 +176,9 @@ function appReducer(state: AppState, action: AppAction): AppState {
     
     case 'COMPLETE_ONBOARDING':
       return { ...state, hasCompletedOnboarding: true };
+
+    case 'RESET_ONBOARDING':
+      return { ...state, hasCompletedOnboarding: false };
     
     case 'SET_MOBILE_SECTION':
       return { ...state, mobileSection: action.payload };
@@ -408,21 +413,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     dispatch({ type: 'SET_MOBILE_SECTION', payload: section });
   }, []);
 
-  // Add a channel
+  // Add a channel. Uses platform-aware normalization so YouTube live chat IDs
+  // (which are case-sensitive) are preserved while Twitch/Kick names lowercase.
   const addChannel = useCallback((platform: PlatformId, channel: string) => {
+    const normalizedChannel = normalizeChannelInput(platform, channel);
+    if (!normalizedChannel) return;
+
     const sourceId = makeId();
     const tabId = makeId();
-    
+
     dispatch({
       type: 'ADD_SOURCE',
-      payload: { id: sourceId, platform, channel: channel.toLowerCase() },
+      payload: { id: sourceId, platform, channel: normalizedChannel },
     });
-    
+
     dispatch({
       type: 'ADD_TAB',
-      payload: { id: tabId, sourceIds: [sourceId], label: `${platform}/${channel}` },
+      payload: { id: tabId, sourceIds: [sourceId], label: `${platform}/${normalizedChannel}` },
     });
-    
+
     dispatch({ type: 'SET_ACTIVE_TAB', payload: tabId });
     dispatch({ type: 'SET_CHANNEL_INPUT', payload: '' });
   }, []);

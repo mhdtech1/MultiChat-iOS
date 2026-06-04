@@ -22,8 +22,8 @@ import {
   formatTimestamp,
   getMessageAuthor,
   getMessageAuthorColor,
-  segmentMessageWithEmotes,
 } from '../../utils/helpers';
+import { buildMessageSegments } from '../../services/emotes';
 
 interface ChatMessageProps {
   message: EnhancedChatMessage;
@@ -47,8 +47,8 @@ export const ChatMessage = memo(function ChatMessage({
   const author = useMemo(() => getMessageAuthor(message), [message]);
   const authorColor = useMemo(() => getMessageAuthorColor(message), [message]);
   const segments = useMemo(
-    () => segmentMessageWithEmotes(message.message, emoteMap),
-    [message.message, emoteMap]
+    () => buildMessageSegments(message, emoteMap),
+    [message, emoteMap]
   );
 
   // Parse badges

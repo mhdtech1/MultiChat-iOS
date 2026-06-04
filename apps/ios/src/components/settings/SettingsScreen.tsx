@@ -16,6 +16,7 @@ import {
   Switch,
   Image,
   Alert,
+  TextInput,
 } from 'react-native';
 import { colors, spacing, borderRadius, typography, shadows, accessibility } from '../../constants/theme';
 import type { PlatformId, NotificationPreferences } from '../../types';
@@ -40,6 +41,9 @@ interface SettingsScreenProps {
   onDisconnectTwitch: () => void;
   onDisconnectKick: () => void;
   onDisconnectYouTube: () => void;
+  // YouTube read-only API key
+  youtubeApiKey: string;
+  onYouTubeApiKeyChange: (value: string) => void;
   // Other actions
   onResetOnboarding: () => void;
   onClearCache: () => void;
@@ -61,6 +65,8 @@ export function SettingsScreen({
   onDisconnectTwitch,
   onDisconnectKick,
   onDisconnectYouTube,
+  youtubeApiKey,
+  onYouTubeApiKeyChange,
   onResetOnboarding,
   onClearCache,
 }: SettingsScreenProps) {
@@ -102,6 +108,28 @@ export function SettingsScreen({
           onConnect={onConnectYouTube}
           onDisconnect={onDisconnectYouTube}
         />
+      </View>
+
+      {/* YouTube read-only access */}
+      <SectionHeader title="YouTube (read-only)" icon="▶️" />
+      <View style={styles.section}>
+        <View style={styles.apiKeyRow}>
+          <Text style={styles.settingTitle}>API key</Text>
+          <Text style={styles.settingDescription}>
+            Paste a YouTube Data API key to read live chat without signing in. Use a live chat ID
+            when adding a YouTube channel.
+          </Text>
+          <TextInput
+            value={youtubeApiKey}
+            onChangeText={onYouTubeApiKeyChange}
+            placeholder="YouTube Data API key"
+            placeholderTextColor={colors.text.muted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            secureTextEntry
+            style={styles.apiKeyInput}
+          />
+        </View>
       </View>
 
       {/* Notifications Section - P2 Recommendation #12 */}
@@ -417,6 +445,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border.default,
     minHeight: accessibility.minTouchTarget,
+  },
+  apiKeyRow: {
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  apiKeyInput: {
+    backgroundColor: colors.background.secondary,
+    borderRadius: borderRadius.md,
+    borderWidth: 1,
+    borderColor: colors.border.default,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    fontSize: typography.fontSize.md,
+    color: colors.text.primary,
   },
   settingInfo: {
     flex: 1,

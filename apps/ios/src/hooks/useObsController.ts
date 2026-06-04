@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Crypto from 'expo-crypto';
 import type { ObsAudioInput, ObsSceneItem, ObsStats } from '../types';
 import { asRecord, clamp01, readNumber } from '../utils/helpers';
@@ -33,6 +33,13 @@ export function useObsController(showNotice: (message: string) => void) {
   const obsPendingRef = useRef<Map<string, ObsPendingRequest>>(new Map());
   const obsRequestIdRef = useRef(1);
   const obsRpcVersionRef = useRef(1);
+  // Mirrors the active password so the handshake reads the latest value even when
+  // a quick-connect applies a new config in the same tick (state is async).
+  const obsPasswordRef = useRef(obsPassword);
+
+  useEffect(() => {
+    obsPasswordRef.current = obsPassword;
+  }, [obsPassword]);
 
   const rejectAllObsPending = useCallback((reason: string) => {
     const pendingEntries = Array.from(obsPendingRef.current.values());
@@ -204,10 +211,11 @@ export function useObsController(showNotice: (message: string) => void) {
         const challenge = typeof authBlock?.challenge === 'string' ? authBlock.challenge : '';
         const salt = typeof authBlock?.salt === 'string' ? authBlock.salt : '';
         if (challenge && salt) {
-          if (!obsPassword.trim()) {
+          const activePassword = obsPasswordRef.current;
+          if (!activePassword.trim()) {
             throw new Error('OBS requires a password.');
           }
-          const secret = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `${obsPassword}${salt}`, {
+          const secret = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, `${activePassword}${salt}`, {
             encoding: Crypto.CryptoEncoding.BASE64,
           });
           authentication = await Crypto.digestStringAsync(
@@ -300,18 +308,27 @@ export function useObsController(showNotice: (message: string) => void) {
         pending.resolve(asRecord(responsePayload.responseData) ?? {});
       }
     },
-    [obsPassword, refreshObsState]
+    [refreshObsState]
   );
 
-  const connectObs = useCallback(() => {
+  const connectObs = useCallback(
+    (override?: { host: string; port: string; password: string }) => {
     if (obsConnecting || obsConnected) return;
 
-    const host = obsHost.trim();
-    const port = obsPort.trim();
+    const host = (override?.host ?? obsHost).trim();
+    const port = (override?.port ?? obsPort).trim();
     if (!host || !port) {
       showNotice('OBS host and port are required.');
       return;
     }
+
+    if (override) {
+      setObsHost(override.host);
+      setObsPort(override.port);
+      setObsPassword(override.password);
+    }
+    // Use the explicit password immediately; state updates are async.
+    obsPasswordRef.current = override?.password ?? obsPassword;
 
     setObsConnecting(true);
     setObsStatusText('Connecting...');
@@ -349,16 +366,19 @@ export function useObsController(showNotice: (message: string) => void) {
       setObsConnected(false);
       setObsStatusText(error instanceof Error ? error.message : String(error));
     }
-  }, [
-    obsConnected,
-    obsConnecting,
-    obsHost,
-    obsPort,
-    handleObsMessage,
-    disconnectObs,
-    rejectAllObsPending,
-    showNotice,
-  ]);
+    },
+    [
+      obsConnected,
+      obsConnecting,
+      obsHost,
+      obsPort,
+      obsPassword,
+      handleObsMessage,
+      disconnectObs,
+      rejectAllObsPending,
+      showNotice,
+    ]
+  );
 
   const switchObsScene = useCallback(
     async (sceneName: string) => {

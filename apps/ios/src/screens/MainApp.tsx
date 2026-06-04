@@ -15,7 +15,9 @@ import type { ChatAdapterStatus } from '@multichat/chat-core';
 import { AppProvider, useApp } from '../context/AppContext';
 import { ChatList } from '../components/chat';
 import { ObsControllerPanel } from '../components/obs/ObsControllerPanel';
+import { ObsSavedConnections } from '../components/obs/ObsSavedConnections';
 import { SettingsScreen } from '../components/settings/SettingsScreen';
+import { FilterSettings } from '../components/settings/FilterSettings';
 import { OnboardingWizard } from '../components/onboarding/OnboardingWizard';
 import { SearchOverlay } from '../components/search/SearchOverlay';
 import { FullScreenLoading } from '../components/common/LoadingStates';
@@ -24,6 +26,7 @@ import { colors, spacing, typography, borderRadius } from '../constants/theme';
 import { useSearch } from '../hooks/useSearch';
 import { useChatSession } from '../hooks/useChatSession';
 import { useGlobalBadgeMap } from '../hooks/useGlobalBadgeMap';
+import { useEmoteMaps } from '../hooks/useEmoteMaps';
 import { useObsController } from '../hooks/useObsController';
 import { usePlatformAuth } from '../hooks/usePlatformAuth';
 import type { ChatSource, ChatTab, CredentialSnapshot, EnhancedChatMessage, PlatformId } from '../types';
@@ -32,8 +35,22 @@ import { platformTag, statusLabel } from '../utils/helpers';
 function AppShell() {
   const { state, dispatch, actions } = useApp();
   const [notice, setNotice] = useState<string | null>(null);
+  const [showFilters, setShowFilters] = useState(false);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourcesReconnectedRef = useRef(false);
+
+  const activeFilterCount = useMemo(() => {
+    const filter = state.messageFilters;
+    return (
+      (filter.platforms.length < 3 ? 1 : 0) +
+      (filter.users.length > 0 ? 1 : 0) +
+      (filter.keywords.length > 0 ? 1 : 0) +
+      (!filter.showSubscriptions ? 1 : 0) +
+      (!filter.showRaids ? 1 : 0) +
+      (!filter.showSuperChats ? 1 : 0) +
+      (!filter.showBits ? 1 : 0)
+    );
+  }, [state.messageFilters]);
 
   const showNotice = useCallback((message: string) => {
     setNotice(message);
@@ -43,7 +60,7 @@ function AppShell() {
 
   const obs = useObsController(showNotice);
   const auth = usePlatformAuth(showNotice);
-  const { badgeMap, emoteMap } = useGlobalBadgeMap();
+  const { badgeMap } = useGlobalBadgeMap();
 
   const credentials = useMemo<CredentialSnapshot>(
     () => ({
@@ -108,6 +125,8 @@ function AppShell() {
     onConnectionStatus,
     showNotice,
   });
+
+  const emoteMap = useEmoteMaps(chat.activeChatSources, state.twitchToken);
 
   useEffect(() => {
     if (!state.isInitialized || sourcesReconnectedRef.current) return;
@@ -195,9 +214,16 @@ function AppShell() {
             <Text style={styles.subtitle}>Chatrix features · iOS</Text>
           </View>
           {state.mobileSection === 'chats' ? (
-            <Pressable onPress={() => dispatch({ type: 'TOGGLE_SEARCH', payload: !state.isSearchOpen })} style={styles.searchButton}>
-              <Text style={styles.searchButtonText}>Search</Text>
-            </Pressable>
+            <View style={styles.headerActions}>
+              <Pressable onPress={() => setShowFilters(true)} style={styles.searchButton}>
+                <Text style={styles.searchButtonText}>
+                  {activeFilterCount > 0 ? `Filters (${activeFilterCount})` : 'Filters'}
+                </Text>
+              </Pressable>
+              <Pressable onPress={() => dispatch({ type: 'TOGGLE_SEARCH', payload: !state.isSearchOpen })} style={styles.searchButton}>
+                <Text style={styles.searchButtonText}>Search</Text>
+              </Pressable>
+            </View>
           ) : null}
         </View>
 
@@ -346,6 +372,15 @@ function AppShell() {
           ) : null}
 
           {state.mobileSection === 'obs' ? (
+            <View style={styles.obsSection}>
+            <ObsSavedConnections
+              currentHost={obs.obsHost}
+              currentPort={obs.obsPort}
+              currentPassword={obs.obsPassword}
+              onApply={obs.applyObsConfig}
+              onConnect={obs.connectObs}
+              showNotice={showNotice}
+            />
             <ObsControllerPanel
               obsHost={obs.obsHost}
               obsPort={obs.obsPort}
@@ -373,6 +408,7 @@ function AppShell() {
               onToggleMute={(input) => void obs.toggleObsInputMute(input)}
               onAdjustVolume={(input, delta) => void obs.adjustObsInputVolume(input, delta)}
             />
+            </View>
           ) : null}
 
           {state.mobileSection === 'settings' ? (
@@ -406,24 +442,11 @@ function AppShell() {
                 void chat.reconnectAllSources();
                 showNotice('Signed out of YouTube.');
               }}
-              onResetOnboarding={() => dispatch({ type: 'COMPLETE_ONBOARDING' })}
+              youtubeApiKey={state.youtubeApiKey}
+              onYouTubeApiKeyChange={(value) => dispatch({ type: 'SET_YOUTUBE_API_KEY', payload: value })}
+              onResetOnboarding={() => dispatch({ type: 'RESET_ONBOARDING' })}
               onClearCache={() => showNotice('Cache cleared.')}
             />
-          ) : null}
-
-          {state.mobileSection === 'settings' ? (
-            <View style={styles.youtubeKeyCard}>
-              <Text style={styles.sectionTitle}>YouTube API key (read-only)</Text>
-              <TextInput
-                value={state.youtubeApiKey}
-                onChangeText={(value) => dispatch({ type: 'SET_YOUTUBE_API_KEY', payload: value })}
-                placeholder="YouTube Data API key"
-                placeholderTextColor={colors.text.muted}
-                autoCapitalize="none"
-                secureTextEntry
-                style={styles.input}
-              />
-            </View>
           ) : null}
         </View>
 
@@ -451,6 +474,13 @@ function AppShell() {
             <Text style={styles.noticeText}>{notice}</Text>
           </View>
         ) : null}
+
+        <FilterSettings
+          isVisible={showFilters}
+          onClose={() => setShowFilters(false)}
+          filter={state.messageFilters}
+          onFilterChange={(filter) => dispatch({ type: 'SET_MESSAGE_FILTERS', payload: filter })}
+        />
 
         <SearchOverlay
           isVisible={state.isSearchOpen}
@@ -488,6 +518,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
   title: { color: colors.text.primary, fontSize: typography.fontSize.xl, fontWeight: typography.fontWeight.bold },
   subtitle: { color: colors.text.muted, fontSize: typography.fontSize.xs },
+  headerActions: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
   searchButton: { borderWidth: 1, borderColor: colors.border.default, borderRadius: borderRadius.md, paddingHorizontal: spacing.sm, paddingVertical: 6 },
   searchButtonText: { color: colors.text.secondary, fontSize: typography.fontSize.xs },
   content: { flex: 1, minHeight: 0 },
@@ -523,7 +554,7 @@ const styles = StyleSheet.create({
   targetPillText: { color: colors.text.secondary, fontSize: typography.fontSize.xs },
   targetPillTextActive: { color: colors.text.primary },
   addCard: { borderWidth: 1, borderColor: colors.border.default, borderRadius: borderRadius.lg, padding: spacing.md, gap: spacing.md, backgroundColor: colors.background.card },
-  youtubeKeyCard: { marginTop: spacing.md, borderWidth: 1, borderColor: colors.border.default, borderRadius: borderRadius.lg, padding: spacing.md, gap: spacing.sm },
+  obsSection: { flex: 1, gap: spacing.sm },
   sectionTitle: { color: colors.text.primary, fontSize: typography.fontSize.md, fontWeight: typography.fontWeight.bold },
   platformRow: { flexDirection: 'row', gap: spacing.sm },
   platformPill: { borderWidth: 1, borderColor: colors.border.default, borderRadius: borderRadius.full, paddingVertical: 4, paddingHorizontal: 12 },
